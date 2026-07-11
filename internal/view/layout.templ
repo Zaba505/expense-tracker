@@ -1,0 +1,28 @@
+package view
+
+// Layout is the base HTML shell every page renders inside. It loads the
+// two embedded assets — the stylesheet and htmx — and nothing else; the
+// app pulls in no scripts, fonts, or styles from the network.
+//
+// htmx is loaded with `defer` so it runs after the document is parsed:
+// it only needs to attach behaviour to elements already in the DOM.
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href={ AssetPath("app.css") }/>
+			<script src={ AssetPath("htmx.min.js") } defer></script>
+		</head>
+		<body>
+			<header class="topbar">
+				<a class="brand" href="/">expense-tracker</a>
+			</header>
+			<main class="content">
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
