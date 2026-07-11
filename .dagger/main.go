@@ -13,6 +13,13 @@
 //	dagger call server-image                            # the scratch image CI would publish
 //	dagger call ci                                       # full pipeline for both binaries (publishes on match)
 //
+// The z5labs pipeline has no Firestore to talk to, so the emulator-backed
+// tests are build-tagged out of it and run separately — and the emulator
+// they need is also the one the local dev loop runs against:
+//
+//	dagger call emulator up --ports 8085:8085           # dev loop: an emulator on localhost:8085
+//	dagger call integration-test                        # CI: `go test -tags integration` against its own emulator
+//
 // Dagger does not allow a module function to return a dependency's type,
 // so each function is terminal: it constructs the z5labs GoApp internally
 // and returns a File, Container, or error.
@@ -20,6 +27,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 
 	"dagger/expense-tracker/internal/dagger"
 )
@@ -112,6 +120,80 @@ func (m *ExpenseTracker) Ci(
 		return err
 	}
 	return goApp(source, pkgImporter, binImporter, registry, auth).Ci(ctx)
+}
+
+// The Firestore emulator: Google's own, shipped inside the Cloud SDK
+// image (the plain image has no emulators, and no JRE to run them).
+const (
+	emulatorImage = "gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators"
+
+	// DefaultEmulatorPort is the port the emulator listens on, in the
+	// container and — when published with `up --ports` — on the host.
+	DefaultEmulatorPort = 8085
+
+	// emulatorService is the hostname a bound emulator answers to inside
+	// Dagger's network.
+	emulatorService = "firestore"
+
+	// goImage runs the emulator-backed tests. It tracks the toolchain in
+	// go.mod; the z5labs module owns the image the build stages use.
+	goImage = "golang:1.26"
+)
+
+// Emulator is a Firestore emulator, for the local dev loop and for the
+// integration tests. Publish it to the host and point the app at it:
+//
+//	dagger call emulator up --ports 8085:8085
+//	FIRESTORE_EMULATOR_HOST=localhost:8085 GCP_PROJECT=demo-expense-tracker \
+//	  OWNER_EMAIL=you@example.com go run ./cmd/server
+//
+// Its data lives only as long as the service does: stop it and the log is
+// gone, which is what `go run ./cmd/seed` is for.
+func (m *ExpenseTracker) Emulator(
+	// Port to listen on, inside the container.
+	//
+	// +optional
+	// +default=8085
+	port int,
+) *dagger.Service {
+	return dag.Container().
+		From(emulatorImage).
+		WithExposedPort(port).
+		AsService(dagger.ContainerAsServiceOpts{
+			// 0.0.0.0, not localhost: the emulator has to answer from
+			// outside its own container to be worth anything.
+			Args: []string{
+				"gcloud", "emulators", "firestore", "start",
+				"--host-port=0.0.0.0:" + strconv.Itoa(port),
+			},
+		})
+}
+
+// IntegrationTest runs the emulator-backed tests — the ones tagged
+// `integration`, which the z5labs `go test -race` stage skips because it
+// has no database — against an emulator bound into the test container.
+// It is self-contained: no host emulator, no host ports.
+func (m *ExpenseTracker) IntegrationTest(
+	ctx context.Context,
+	// +defaultPath="/"
+	source *dagger.Directory,
+) (string, error) {
+	emulator := m.Emulator(DefaultEmulatorPort)
+	emulatorHost := emulatorService + ":" + strconv.Itoa(DefaultEmulatorPort)
+
+	return dag.Container().
+		From(goImage).
+		// Dagger starts the service and waits for the port to accept a
+		// connection before the exec runs, so the tests never race the
+		// emulator's (slow, JVM) startup.
+		WithServiceBinding(emulatorService, emulator).
+		WithEnvVariable("FIRESTORE_EMULATOR_HOST", emulatorHost).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("expense-tracker-go-mod")).
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("expense-tracker-go-build")).
+		WithMountedDirectory("/src", source).
+		WithWorkdir("/src").
+		WithExec([]string{"go", "test", "-race", "-tags", "integration", "./..."}).
+		Stdout(ctx)
 }
 
 // goApp constructs a z5labs GoApp for one binary. Centralizing it keeps

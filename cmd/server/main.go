@@ -1,8 +1,9 @@
 // Command server runs the expense-tracker HTTP application.
 //
 // It loads its configuration from the environment (see internal/config),
-// serves on $PORT, and shuts down gracefully when the platform sends
-// SIGTERM. Firestore wiring arrives with `story(eventlog)`.
+// connects to Firestore — the live service, or a local emulator when
+// FIRESTORE_EMULATOR_HOST is set — serves on $PORT, and shuts down
+// gracefully when the platform sends SIGTERM.
 package main
 
 import (
@@ -14,7 +15,15 @@ import (
 	"os/signal"
 	"syscall"
 
+	// The z5labs pipeline ships this binary in a scratch image, which
+	// carries no CA certificates. Firestore is reached over TLS, so
+	// without a trust store the first call fails with "certificate signed
+	// by unknown authority". This embeds Mozilla's roots into the binary,
+	// which is what makes the scratch image viable.
+	_ "golang.org/x/crypto/x509roots/fallback"
+
 	"github.com/Zaba505/expense-tracker/internal/config"
+	"github.com/Zaba505/expense-tracker/internal/eventlog"
 	"github.com/Zaba505/expense-tracker/internal/web"
 )
 
@@ -41,6 +50,24 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 
+	// Connecting is lazy — this fails only on a configuration or
+	// credentials problem, which is worth dying for. Whether Firestore is
+	// actually reachable is answered by /health/readiness, not by
+	// refusing to boot: an instance that cannot reach the database should
+	// come up and say so.
+	store, err := eventlog.New(ctx, eventlog.Options{
+		ProjectID:    cfg.GCPProject,
+		EmulatorHost: cfg.FirestoreEmulatorHost,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := store.Close(); err != nil {
+			logger.Error("closing event store", slog.Any("error", err))
+		}
+	}()
+
 	// Listen before announcing: a port already in use should fail here,
 	// not look like a healthy start followed by silence.
 	lis, err := net.Listen("tcp", cfg.Addr())
@@ -54,5 +81,5 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		slog.Bool("firestore_emulator", cfg.UsesEmulator()),
 	)
 
-	return web.Serve(ctx, lis, web.NewHandler(logger), logger)
+	return web.Serve(ctx, lis, web.NewHandler(logger, store), logger)
 }
