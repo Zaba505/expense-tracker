@@ -1,0 +1,15 @@
+{
+  "name": "expense-tracker",
+  "engineVersion": "v0.21.7",
+  "sdk": {
+    "source": "go"
+  },
+  "dependencies": [
+    {
+      "name": "z5labs",
+      "source": "github.com/z5labs/devex/daggerverse/z5labs@main",
+      "pin": "bc5cee36080549722c6d3bf02152aa7d46d2dcf3"
+    }
+  ],
+  "source": ".dagger"
+}
