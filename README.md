@@ -22,9 +22,10 @@ internal/
   domain/        Event and the event-sourcing vocabulary
   eventlog/      append-only EventStore (Firestore + in-memory)
   projection/    Fold(events) -> state, rollups, known-types, yearly grid
-  web/           net/http ServeMux, handlers, auth middleware
-  view/          templ components + embedded static assets
+  web/           net/http ServeMux, handlers, auth middleware, the server
+  view/          templ components + the assets' URL space
 static/          vendored htmx + CSS (embedded via go:embed)
+embed.go         the go:embed of static/ (only the root package can reach it)
 deploy/          Terraform (Firestore, Cloud Run, Artifact Registry, ...)
 .dagger/         this repo's Dagger module (thin wrapper over z5labs)
 dagger.json      pins the shared z5labs build module
@@ -41,6 +42,32 @@ every problem at once:
 | `OWNER_EMAIL`             | yes      | —       | the single account allowed to use the app          |
 | `PORT`                    | no       | `8080`  | HTTP listen port (Cloud Run injects this)          |
 | `FIRESTORE_EMULATOR_HOST` | no       | —       | when set, use a local Firestore emulator           |
+
+## Front end
+
+HTML is rendered on the server with [templ](https://templ.guide) and made
+interactive with [htmx](https://htmx.org) — no SPA, no bundler, no npm.
+Both front-end assets are **vendored into `static/` and embedded into the
+binary** (`go:embed`, see `embed.go`), never pulled from a CDN: a deployed
+container is self-contained.
+
+| Route          | Serves                                                     |
+| -------------- | ---------------------------------------------------------- |
+| `GET /`        | the home page (a placeholder until the entry stories land)  |
+| `GET /healthz` | `200 ok`                                                    |
+| `GET /static/` | the embedded htmx + CSS                                     |
+
+`/healthz` is a **liveness** probe: it reports that the process is up and
+serving, and deliberately does not reach out to Firestore, so a slow or
+failing dependency cannot get an otherwise-healthy container killed and
+restarted into the same failure.
+
+htmx is vendored at **2.0.7**. To move to a new version, replace the file
+and update that number here:
+
+```sh
+curl -o static/htmx.min.js https://unpkg.com/htmx.org@<version>/dist/htmx.min.js
+```
 
 ## Build & dev tooling — Dagger, not Make
 
@@ -112,11 +139,17 @@ go run ./cmd/server
 ### Regenerate templ
 
 HTML is authored in `.templ` files and compiled to Go. After editing a
-template (wired in by a later story), regenerate before building:
+template, regenerate before building:
 
 ```sh
-templ generate
+go tool templ generate
 ```
+
+Unlike the Dagger codegen below, the generated `*_templ.go` files **are
+committed**: the build pipeline deliberately does not run `templ generate`,
+so a fresh checkout has to already compile. CI re-runs the command and
+fails if the result differs from what was committed — if that trips, you
+edited a `.templ` without regenerating.
 
 ### Working on the Dagger module itself
 
