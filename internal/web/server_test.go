@@ -31,6 +31,26 @@ func serve(ctx context.Context, lis net.Listener, h http.Handler) <-chan error {
 	return done
 }
 
+// fetch issues a GET over the network, bounded by both testTimeout and the
+// test's own lifetime, so a handler that never answers fails its test instead
+// of hanging the suite. Callers only ever need the status, so the body is
+// closed here while the request context is still live.
+func fetch(ctx context.Context, url string) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
 // awaitServeReturn waits for Serve to return and reports its error.
 func awaitServeReturn(t *testing.T, done <-chan error) error {
 	t.Helper()
@@ -63,17 +83,15 @@ func TestServe_ReturnsNilOnCleanShutdown(t *testing.T) {
 	t.Parallel()
 
 	lis, addr := listen(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := serve(ctx, lis, http.NotFoundHandler())
 
 	// The server is up and reachable before we ask it to stop.
-	resp, err := http.Get("http://" + addr + "/")
-	if err != nil {
+	if _, err := fetch(t.Context(), "http://"+addr+"/"); err != nil {
 		t.Fatalf("request to running server: %v", err)
 	}
-	resp.Body.Close()
 
 	cancel() // the SIGTERM equivalent
 
@@ -101,7 +119,7 @@ func TestServe_DrainsInFlightRequest(t *testing.T) {
 	})
 
 	lis, addr := listen(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := serve(ctx, lis, handler)
@@ -111,14 +129,10 @@ func TestServe_DrainsInFlightRequest(t *testing.T) {
 		err    error
 	}
 	inFlight := make(chan result, 1)
+	reqCtx := t.Context() // captured here: not for a goroutine to reach for
 	go func() {
-		resp, err := http.Get("http://" + addr + "/slow")
-		if err != nil {
-			inFlight <- result{err: err}
-			return
-		}
-		defer resp.Body.Close()
-		inFlight <- result{status: resp.StatusCode}
+		status, err := fetch(reqCtx, "http://"+addr+"/slow")
+		inFlight <- result{status: status, err: err}
 	}()
 
 	<-entered
@@ -157,7 +171,7 @@ func TestServe_ReportsServeFailure(t *testing.T) {
 	lis, _ := listen(t)
 	lis.Close() // accept will fail immediately
 
-	err := awaitServeReturn(t, serve(context.Background(), lis, http.NotFoundHandler()))
+	err := awaitServeReturn(t, serve(t.Context(), lis, http.NotFoundHandler()))
 	if err == nil {
 		t.Fatal("Serve() = nil, want an error when the listener cannot accept")
 	}
