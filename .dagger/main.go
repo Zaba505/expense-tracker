@@ -8,6 +8,7 @@
 // name. Common commands:
 //
 //	dagger call check                                   # fmt + vet + lint + test -race (no build)
+//	dagger call templ-check                             # generated *_templ.go is in sync with the .templ
 //	dagger call server-binary -o ./bin/server           # the exact CI artifact, single-arch, locally
 //	dagger call importer-binary -o ./bin/importer
 //	dagger call server-image                            # the scratch image CI would publish
@@ -20,8 +21,10 @@
 //	dagger call emulator --seed up --ports 8085:8085    # just the emulator, for a `go run ./cmd/server` loop
 //	dagger call integration-test                        # `go test -tags integration` against its own emulator
 //
-// The z5labs pipeline has no Firestore to talk to, so the emulator-backed
-// tests are build-tagged out of it and run separately.
+// The z5labs pipeline is deliberately narrow: it has no Firestore to talk
+// to, and it does not run templ. So the emulator-backed tests are
+// build-tagged out of it, and both they and the templ-diff check are their
+// own functions — which is also how CI runs them, one `dagger call` each.
 //
 // Dagger does not allow a module function to return a dependency's type,
 // so each function is terminal: it constructs the z5labs GoApp internally
@@ -59,6 +62,47 @@ func (m *ExpenseTracker) Check(
 ) error {
 	return dag.Z5Labs().GoLib(source).Ci(ctx)
 }
+
+// TemplCheck re-runs `templ generate` and fails if the result differs
+// from what is committed. The z5labs pipeline does not run templ, and the
+// generated *_templ.go is committed precisely so it doesn't have to — a
+// fresh checkout has to already compile. That trade only holds if
+// something enforces the two staying in sync; this is that something.
+//
+// It compares content, not timestamps: templ leaves a file alone when the
+// output is unchanged, but a check that keyed on writes rather than bytes
+// would rot the moment that stopped being true.
+func (m *ExpenseTracker) TemplCheck(
+	ctx context.Context,
+	// +defaultPath="/"
+	source *dagger.Directory,
+) error {
+	_, err := dag.Container().
+		From(goImage).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("expense-tracker-go-mod")).
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("expense-tracker-go-build")).
+		WithDirectory("/src", source).
+		WithWorkdir("/src").
+		// templ is pinned by go.mod's tool directive, so the generator
+		// here is the one a developer gets from `go tool templ generate` —
+		// otherwise CI and the desk would disagree on version-stamped
+		// output and this check would fail for the wrong reason.
+		WithExec([]string{"sh", "-c", templDiff}).
+		Sync(ctx)
+	return err
+}
+
+// templDiff regenerates in place against a pristine copy and diffs the
+// two. `diff` prints exactly which files drifted, and Dagger surfaces a
+// failed exec's output, so the error names the file to regenerate.
+const templDiff = `set -eu
+cp -a /src /before
+go tool templ generate
+if ! diff -ru /before /src; then
+	echo "templ output is stale: run 'go tool templ generate' and commit the *_templ.go files" >&2
+	exit 1
+fi
+`
 
 // ServerBinary compiles cmd/server into the exact binary CI publishes
 // (CGO disabled, -trimpath, -s -w), single-arch for the host. Export it
@@ -144,8 +188,9 @@ const (
 	// import: .dagger is a separate module, and the app's is internal.
 	eventsCollection = "events"
 
-	// goImage runs the emulator-backed tests. It tracks the toolchain in
-	// go.mod; the z5labs module owns the image the build stages use.
+	// goImage runs this module's own Go stages — the templ check and the
+	// emulator-backed tests. It tracks the toolchain in go.mod; the z5labs
+	// module owns the image the build stages use.
 	goImage = "golang:1.26"
 )
 

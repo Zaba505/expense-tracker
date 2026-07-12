@@ -1,0 +1,151 @@
+name: CI
+
+# Every check is one `dagger call` against this repo's module, so CI runs the
+# same commands a developer runs — the workflow contributes the runner and the
+# fan-out, never a build step of its own. If a leg fails here, reproduce it by
+# running the command in its `run:` line locally.
+#
+#   dagger call templ-check        generated *_templ.go matches the .templ
+#   dagger call ci                 the z5labs pipeline: gofmt, go vet, golangci-lint,
+#                                  go test -race, multi-arch build — for both binaries
+#   dagger call integration-test   the emulator-backed tests, tagged `integration`
+#
+# `ci` takes no --registry here, so it builds the images and publishes nothing;
+# publishing is a separate, deploy-time concern (#7).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Must equal dagger.json's engineVersion — the `pin` job fails the run if it
+  # drifts. The CLI provisions the engine of its own version, so a mismatch here
+  # silently runs the module against an engine it wasn't generated for.
+  DAGGER_VERSION: "0.21.7"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded PR pushes are dead work; main's runs are the record and are kept.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Fail fast on a bad pin, and warm the engine-image cache exactly once. Doing
+  # this in one job before the fan-out means a cold cache is a single ~600MB
+  # pull, not three simultaneous ones racing to save the same key.
+  engine:
+    name: Prime Dagger engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify DAGGER_VERSION matches dagger.json
+        run: |
+          set -euo pipefail
+          pinned=$(jq -r '.engineVersion' dagger.json)
+          if [ "$pinned" != "v${DAGGER_VERSION}" ]; then
+            echo "::error::dagger.json pins engineVersion '$pinned' but this workflow pins 'v${DAGGER_VERSION}'." \
+                 "Update env.DAGGER_VERSION in .github/workflows/ci.yml to match."
+            exit 1
+          fi
+
+      # lookup-only: on a hit we only need to know the key exists — the legs
+      # each restore the tarball themselves, so downloading it here too would
+      # buy nothing.
+      - name: Probe engine cache
+        id: probe
+        uses: actions/cache/restore@v4
+        with:
+          path: engine.tar.gz
+          key: dagger-engine-v${{ env.DAGGER_VERSION }}
+          lookup-only: true
+
+      - name: Pull engine image
+        if: steps.probe.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          IMAGE="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          for i in 1 2 3; do
+            timeout 300 docker pull "$IMAGE" && break
+            echo "engine pull attempt $i failed/timed out; retrying in 5s" >&2
+            sleep 5
+          done
+          docker image inspect "$IMAGE" >/dev/null   # fail the job if still missing
+          docker save "$IMAGE" | gzip > engine.tar.gz
+
+      - name: Save engine cache
+        if: steps.probe.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: engine.tar.gz
+          key: dagger-engine-v${{ env.DAGGER_VERSION }}
+
+  check:
+    name: ${{ matrix.check.name }}
+    needs: [engine]
+    runs-on: ubuntu-latest
+    # The slowest leg (`ci`: lint + race tests + a multi-arch build of both
+    # binaries) runs well under this on a cold cache; it's a backstop, not a
+    # budget.
+    timeout-minutes: 25
+    strategy:
+      # Every leg reports independently: a lint failure must not hide a broken
+      # integration test, or the next push fixes one and discovers the other.
+      fail-fast: false
+      matrix:
+        check:
+          - name: templ generate is committed
+            call: templ-check
+          - name: fmt, vet, lint, test, build
+            call: ci
+          - name: Firestore integration tests
+            call: integration-test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore engine image
+        id: engine-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: engine.tar.gz
+          key: dagger-engine-v${{ env.DAGGER_VERSION }}
+
+      # The `engine` job has already pulled and cached the image, so this is
+      # normally a load from disk. The pull is the fallback for a cache that was
+      # evicted between the two jobs.
+      - name: Load engine image
+        env:
+          CACHE_HIT: ${{ steps.engine-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          IMAGE="registry.dagger.io/engine:v${DAGGER_VERSION}"
+          if [ "$CACHE_HIT" = "true" ]; then
+            gunzip -c engine.tar.gz | docker load
+          else
+            for i in 1 2 3; do
+              timeout 300 docker pull "$IMAGE" && break
+              echo "engine pull attempt $i failed/timed out; retrying in 5s" >&2
+              sleep 5
+            done
+            docker image inspect "$IMAGE" >/dev/null
+          fi
+
+      - name: Install Dagger CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://dl.dagger.io/dagger/install.sh \
+            | DAGGER_VERSION="${DAGGER_VERSION}" BIN_DIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: dagger call ${{ matrix.check.call }}
+        # Optional: with the secret unset this is empty and Dagger simply runs
+        # without Cloud telemetry. Set it to get a trace URL for a failed leg.
+        env:
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+        run: dagger call ${{ matrix.check.call }}
