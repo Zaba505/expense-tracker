@@ -106,6 +106,34 @@ the whole build recipe lives in the pinned dependency.
 Prereqs: the [`dagger` CLI](https://docs.dagger.io/install) and a
 container runtime (Docker or Podman). Run everything from the repo root.
 
+### The container image
+
+Each binary ships as a **`scratch` image**: the static binary at
+`/app/<name>`, set as the entrypoint, and *nothing else* — no shell, no
+package manager, no `/etc`, no filesystem to speak of. It is built for
+`linux/amd64` and `linux/arm64`. Nobody in this repo writes that image;
+`GoApp` does, the same way for every z5labs binary, which is why there is
+no `Dockerfile` to review or to drift.
+
+An empty image is only viable if the binary is genuinely self-contained,
+and that is a claim about the **app**, not about the build. Two things
+make it true here, and both are easy to undo by accident:
+
+- **The front end is in the binary.** `static/` is embedded with
+  `go:embed` (`embed.go`), so there is no directory for the image to be
+  missing.
+- **The CA roots are in the binary.** A scratch image carries no root
+  certificates, so every outbound TLS call — Firestore, Google APIs, OIDC
+  later — would fail with *"certificate signed by unknown authority"*. Both
+  `main`s blank-import
+  [`x509roots/fallback`](https://pkg.go.dev/golang.org/x/crypto/x509roots/fallback),
+  which installs Mozilla's bundle as `crypto/x509`'s fallback roots. It is
+  a load-bearing import that reads like an unused one, so a test in each
+  `cmd` fails if it goes missing (`TestCARootsAreLinkedIn`).
+
+Both claims are only really settled by running the thing, which is what
+`dagger call image-smoke-test` does — see below.
+
 ### Command reference (replaces the old make targets)
 
 | Goal (old make target)      | Dagger command                                          |
@@ -116,6 +144,7 @@ container runtime (Docker or Podman). Run everything from the repo root.
 | build the importer binary   | `dagger call importer-binary -o ./bin/importer`         |
 | build the server image      | `dagger call server-image export --path ./server.tar`   |
 | build the importer image    | `dagger call importer-image export --path ./importer.tar` |
+| check the image really runs | `dagger call image-smoke-test`                          |
 | full CI pipeline (both)     | `dagger call ci`                                        |
 | publish (CI, on `main`)     | `dagger call ci --registry=<host> --auth=env:REG_TOKEN` |
 | run the app + its deps      | `dagger call run-against local up --ports 8080:8080`    |
@@ -133,6 +162,15 @@ container runtime (Docker or Podman). Run everything from the repo root.
 - **`server-image` / `importer-image`** return the scratch container CI
   would publish (`GoApp.Builder().Container`); chain `export`, `as-tarball`,
   or `publish` as needed.
+- **`image-smoke-test`** starts the scratch image itself, with a Firestore
+  emulator behind it, and asks it for the four routes that prove it is
+  deployable: liveness (the static binary runs on an empty filesystem and
+  listens on `$PORT` — the test deliberately hands it a port that is *not*
+  the default), readiness (the container can reach its database), the
+  embedded stylesheet (assets are in the binary, not on a disk that does not
+  exist), and the home page. Every other check in this repo tests the
+  *source* from inside a golang container — which has a shell, a libc and a
+  CA bundle. This is the only one that tests the thing we deploy.
 - **`ci`** runs the full pipeline for both binaries: shared checks, a
   multi-arch scratch build, and — when `--registry` is set and HEAD's ref
   matches z5labs' `publishOn` filter (default `^refs/heads/main$`) — a
@@ -165,6 +203,7 @@ drift from this one:
 | templ generate is committed | `dagger call templ-check`      |
 | fmt, vet, lint, test, build | `dagger call ci`               |
 | Firestore integration tests | `dagger call integration-test` |
+| the image runs and serves   | `dagger call image-smoke-test` |
 
 The legs run in parallel and report independently (`fail-fast: false`), so a
 lint failure cannot hide a broken integration test — you fix them in one
