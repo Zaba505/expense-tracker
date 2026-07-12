@@ -16,7 +16,7 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 
 		next.ServeHTTP(rec, r)
 
-		logger.LogAttrs(r.Context(), slog.LevelInfo, "request",
+		logger.InfoContext(r.Context(), "request",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
 			slog.Int("status", rec.status),

@@ -72,7 +72,7 @@ func handleReadiness(logger *slog.Logger, store Checker) http.HandlerFunc {
 			// that does anything with the context it is handed can drop the
 			// very record that says so. Nothing is lost by using the parent —
 			// ctx derives from it, so the request-scoped values are the same.
-			logger.LogAttrs(r.Context(), slog.LevelError, "readiness check failed",
+			logger.ErrorContext(r.Context(), "readiness check failed",
 				slog.String("dependency", "firestore"),
 				slog.Duration("latency", latency),
 				slog.Any("error", err),
