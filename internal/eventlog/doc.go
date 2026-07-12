@@ -5,9 +5,11 @@
 //
 // One Store serves both environments unchanged: it reaches the live
 // service with Application Default Credentials, or a local Firestore
-// emulator when Options.EmulatorHost says so.
+// emulator when Options.EmulatorHost says so. Memory is the same log with
+// nothing under it, for tests and folds that need no database.
 //
-// This story wires up the client, the events collection, and the
-// connectivity Check behind GET /health/readiness. The Event type and the
-// append/load operations arrive with the next `story(eventlog)`.
+// The interface both satisfy is EventStore, and it has no Update and no
+// Delete. Consumers depend on that interface rather than on Firestore,
+// which is what keeps the append-only rule from being something each
+// caller has to remember.
 package eventlog
