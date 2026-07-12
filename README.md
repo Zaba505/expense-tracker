@@ -150,6 +150,8 @@ Both claims are only really settled by running the thing, which is what
 | run the app + its deps      | `dagger call run-against local up --ports 8080:8080`    |
 | a Firestore emulator alone  | `dagger call emulator --seed up --ports 8085:8085`      |
 | emulator-backed tests       | `dagger call integration-test`                          |
+| check the Terraform         | `dagger call terraform validate`                        |
+| plan / apply the infra      | `dagger call terraform --project=… … plan` (see `deploy/`) |
 
 - **`check`** runs the shared z5labs stages once — `gofmt`, `go vet`,
   `golangci-lint`, `go test -race` — and builds nothing. Fast PR gate.
@@ -183,6 +185,8 @@ Both claims are only really settled by running the thing, which is what
 - **`integration-test`** runs the emulator-backed tests (`//go:build
   integration`) against an emulator bound into the test container. It needs
   no host emulator and no host ports, so CI can run it as-is.
+- **`terraform`** runs the `deploy/` root module — `validate`, `plan`,
+  `apply`, `output`, and the one-off `state-bucket` (see below).
 
 > The z5labs pipeline deliberately does **not** run `templ generate` or a
 > Firestore emulator. That is why `templ-check` and `integration-test` are
@@ -204,6 +208,7 @@ drift from this one:
 | fmt, vet, lint, test, build | `dagger call ci`               |
 | Firestore integration tests | `dagger call integration-test` |
 | the image runs and serves   | `dagger call image-smoke-test` |
+| Terraform is valid          | `dagger call terraform validate` |
 
 The legs run in parallel and report independently (`fail-fast: false`), so a
 lint failure cannot hide a broken integration test — you fix them in one
@@ -222,6 +227,50 @@ the z5labs pipeline reads the refs at `HEAD` to decide whether to publish. It
 therefore fails from inside a `git worktree`, where `.git` is a file pointing
 at the parent repo. Run it from a normal clone; `check`, `templ-check`, and
 `integration-test` do not care.
+
+### The cloud footprint — `deploy/`, run through Dagger
+
+The infrastructure is a Terraform root module in [`deploy/`](deploy/):
+Firestore (native mode, the event log), Artifact Registry, the Cloud Run
+service, the service account the app runs as (`roles/datastore.user` and
+nothing more), Secret Manager, and the Workload Identity pool that lets
+GitHub Actions deploy without a service-account key.
+
+**It runs through Dagger, like everything else here** — there is no
+`terraform` on your PATH in this project:
+
+```sh
+dagger call terraform validate               # fmt + validate; no cloud, no credentials
+
+export TF_ARGS="--project=<id> --owner-email=<you@example.com> \
+  --access-token=cmd://\"gcloud auth print-access-token\""
+
+dagger call terraform $TF_ARGS state-bucket  # once per project; idempotent
+dagger call terraform $TF_ARGS plan
+dagger call terraform $TF_ARGS apply
+dagger call terraform $TF_ARGS output        # JSON: registry, service, identities
+```
+
+The same argument the build makes: a `terraform` on someone's PATH is a
+version, a plugin cache and a set of ambient credentials nobody else has —
+and it applies to production. Here the CLI is pinned to an image, the
+credentials are an explicit `Secret` argument, and the command CI runs is the
+command you run. Credentials are a **short-lived access token**, never a
+service-account key, which is the same posture the deploy pipeline takes with
+Workload Identity Federation: no static cloud key exists, in the repo or in
+GitHub.
+
+`state-bucket` is a separate command because Terraform initializes its
+backend before it evaluates any configuration — the GCS bucket its state
+lives in cannot be a resource in the module that stores state there. It is
+the one bootstrap step, and it is a command rather than a paragraph you
+follow by hand.
+
+`deploy/README.md` covers standing up an environment end to end. The two
+things worth knowing from here: the service is created **private** and stays
+that way until the app authenticates its own callers (#13), and Terraform
+owns the Cloud Run service but **not its image** — `gcloud run deploy` does,
+so an apply never rolls the running build back.
 
 ### Run locally — `run-against local`
 

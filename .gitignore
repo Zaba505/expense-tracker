@@ -4,3 +4,18 @@
 # templ's generated Go (*_templ.go) is committed, not ignored: the build
 # pipeline does not run `templ generate`, so a fresh checkout must already
 # contain it. Run `templ generate` after editing a .templ file.
+
+# Terraform runs inside a container (`dagger call terraform ...`), so none of
+# this should exist in a checkout — but it does the moment someone runs the
+# CLI here directly, and a stray *.tfvars is how a project id and an email
+# get committed. State never lands on disk at all: the backend is GCS.
+#
+# .terraform.lock.hcl is NOT ignored. It pins the provider builds by hash,
+# for every platform the module might run on, and committing it is what makes
+# an apply from CI and an apply from a laptop the same apply.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
