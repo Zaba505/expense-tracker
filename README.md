@@ -147,6 +147,8 @@ Both claims are only really settled by running the thing, which is what
 | check the image really runs | `dagger call image-smoke-test`                          |
 | full CI pipeline (both)     | `dagger call ci`                                        |
 | publish (CI, on `main`)     | `dagger call ci --registry=<host> --auth=env:REG_TOKEN` |
+| the tag this commit gets    | `dagger call image-tag`                                 |
+| publish **and** deploy      | `dagger call deploy --project=… --access-token=…`       |
 | run the app + its deps      | `dagger call run-against local up --ports 8080:8080`    |
 | a Firestore emulator alone  | `dagger call emulator --seed up --ports 8085:8085`      |
 | emulator-backed tests       | `dagger call integration-test`                          |
@@ -175,8 +177,14 @@ Both claims are only really settled by running the thing, which is what
   CA bundle. This is the only one that tests the thing we deploy.
 - **`ci`** runs the full pipeline for both binaries: shared checks, a
   multi-arch scratch build, and — when `--registry` is set and HEAD's ref
-  matches z5labs' `publishOn` filter (default `^refs/heads/main$`) — a
-  publish. With no `--registry` it's a checks + build gate, safe anywhere.
+  matches the `publishOn` filter (`^refs/heads/main$`) — a publish. With no
+  `--registry` it's a checks + build gate, safe anywhere.
+- **`image-tag`** prints the tag this commit's images are published under —
+  `<shortSha>-<commitISO>`, z5labs' scheme for a branch build. `deploy` needs
+  it because the pipeline does not report what it pushed.
+- **`deploy`** runs `ci` with a registry (so the image is published by the
+  shared pipeline, not by a build of its own) and then rolls the Cloud Run
+  service onto that exact tag. It is the same command CI runs — see below.
 - **`run-against local`** is the run configuration (see below).
 - **`emulator`** is a Firestore emulator on its own, as a Dagger service.
   `--seed` fills it with a couple of months of sample events; `up --ports
@@ -212,9 +220,53 @@ drift from this one:
 
 The legs run in parallel and report independently (`fail-fast: false`), so a
 lint failure cannot hide a broken integration test — you fix them in one
-pass, not two. No `--registry` is passed, so `ci` builds both images and
-publishes nothing; publishing is deploy-time and belongs to the deploy
-story.
+pass, not two. None of them is passed a `--registry`, so they build both
+images and publish nothing: they are checks, and a check should not be able
+to change the world.
+
+### Continuous deployment
+
+A push to `main` that passes every leg above then runs one more:
+
+```sh
+dagger call deploy --project=<id> --access-token=<token>
+```
+
+which publishes this commit's images through the z5labs pipeline and points
+Cloud Run at the server one. `needs: [check]` is the gate, and being a job in
+the same workflow makes it a tight one: the deploy runs on the very commit the
+checks passed on, from the same checkout.
+
+**There is no service-account key** — not in the repository, not in GitHub's
+secrets, not on a desk. GitHub mints an OIDC token for the run, Google's
+workload identity pool exchanges it for an access token good for the hour, and
+that token is the whole of what the deploy holds. The pool only accepts tokens
+whose `repository` claim is this repository, which is the trust boundary of the
+entire arrangement and is argued in [`deploy/wif.tf`](deploy/wif.tf). One token
+does both halves of the job: Artifact Registry takes it as the password for
+`oauth2accesstoken`, and `gcloud run deploy` reads it from the environment.
+
+Three things fence the deploy in, and they are independent:
+
+- the job runs only on a push to `main`, only after the checks are green;
+- the pipeline publishes only for a HEAD ref matching `^refs/heads/main$`, so
+  a job that somehow ran elsewhere would push nothing;
+- the token cannot be minted by a workflow in any other repository, so a fork's
+  pull request cannot deploy — its OIDC token carries the fork's own claim.
+
+**What proves the deployed app works is the rollout itself.** `gcloud run
+deploy` does not return until the new revision passes its startup probe, and
+that probe is `GET /health/readiness` — which round-trips a document through
+Firestore. So a green deploy is a deployed service that has already written to
+and read from the event log as the runtime account. A revision that cannot
+reach Firestore never takes traffic, and the previous one keeps serving it.
+
+Terraform owns the service; the deploy owns only the image it runs (see
+[`deploy/run.tf`](deploy/run.tf)). If the service does not exist yet, the
+deploy refuses rather than creating one without any of that configuration.
+It skips itself entirely until the repository variables in
+[`deploy/README.md`](deploy/README.md) are set — until an environment exists,
+there is nothing to deploy to.
 
 `DAGGER_VERSION` in the workflow must equal `engineVersion` in `dagger.json`
 — the run fails fast if they drift, since the CLI provisions the engine of
@@ -225,8 +277,9 @@ so a run does not re-pull it.
 One sharp edge: `dagger call ci` needs a real `.git` **directory**, because
 the z5labs pipeline reads the refs at `HEAD` to decide whether to publish. It
 therefore fails from inside a `git worktree`, where `.git` is a file pointing
-at the parent repo. Run it from a normal clone; `check`, `templ-check`, and
-`integration-test` do not care.
+at the parent repo. The same goes for `image-tag` and `deploy`, which read the
+commit to know which tag they are talking about. Run those from a normal
+clone; `check`, `templ-check`, and `integration-test` do not care.
 
 ### The cloud footprint — `deploy/`, run through Dagger
 
