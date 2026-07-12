@@ -12,6 +12,7 @@
 //	dagger call server-binary -o ./bin/server           # the exact CI artifact, single-arch, locally
 //	dagger call importer-binary -o ./bin/importer
 //	dagger call server-image                            # the scratch image CI would publish
+//	dagger call image-smoke-test                        # run that image and check it actually serves
 //	dagger call ci                                       # full pipeline for both binaries (publishes on match)
 //
 // It also owns the app's run configuration and the dependencies that go

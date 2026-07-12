@@ -9,6 +9,7 @@ name: CI
 #   dagger call ci                 the z5labs pipeline: gofmt, go vet, golangci-lint,
 #                                  go test -race, multi-arch build — for both binaries
 #   dagger call integration-test   the emulator-backed tests, tagged `integration`
+#   dagger call image-smoke-test   the scratch image runs and serves on $PORT
 #
 # `ci` takes no --registry here, so it builds the images and publishes nothing;
 # publishing is a separate, deploy-time concern (#7).
@@ -105,6 +106,8 @@ jobs:
             call: ci
           - name: Firestore integration tests
             call: integration-test
+          - name: the image runs and serves
+            call: image-smoke-test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
