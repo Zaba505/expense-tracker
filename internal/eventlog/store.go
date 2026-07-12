@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/Zaba505/expense-tracker/internal/domain"
+	"github.com/Zaba505/expense-tracker/internal/money"
 )
 
 // Collection names. The event log is the single source of truth and lives
@@ -100,12 +105,188 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 	}, nil
 }
 
-// Events is the append-only event collection. It is the seam the event
-// append and load operations are built on (`story(eventlog)`, the event
-// type and store); nothing outside this package should reach past it into
-// the Firestore client.
-func (s *Store) Events() *firestore.CollectionRef {
-	return s.events
+// Append writes e as a new document in the events collection and returns
+// it as stored. It implements EventStore.
+//
+// Immutability is structural rather than promised. The document ID is
+// generated here, so no caller can name a document to overwrite, and the
+// write is a Create rather than a Set: were an ID ever to collide,
+// Firestore would refuse the write instead of replacing what is there.
+// Nothing in this package issues an Update or a Delete against the
+// collection — the only way to change what the log says is to append to
+// it.
+//
+// That holds for callers who go through this package, which is every
+// caller in this binary. It is not yet enforced by the database: making
+// Firestore itself reject an update to an existing event belongs in the
+// security rules, which the deploy story writes.
+func (s *Store) Append(ctx context.Context, e domain.Event) (domain.Event, error) {
+	e, err := prepare(e, time.Now)
+	if err != nil {
+		return domain.Event{}, err
+	}
+
+	ref := s.events.NewDoc()
+	if _, err := ref.Create(ctx, newEventDoc(e)); err != nil {
+		// As in Load: the gRPC status for a cancelled write says
+		// "Canceled" but does not unwrap to context.Canceled, and a caller
+		// that gave up needs to read differently from a database that
+		// fell over.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return domain.Event{}, fmt.Errorf("eventlog: appending event: %w", ctxErr)
+		}
+		return domain.Event{}, fmt.Errorf("eventlog: appending event: %w", err)
+	}
+
+	e.ID = ref.ID
+	return e, nil
+}
+
+// Load streams every event in the log, ordered by recorded_at and then by
+// document ID. It implements EventStore.
+//
+// The second ordering is what makes the order total: Firestore's
+// timestamps are microsecond-resolution, so two events appended in the
+// same instant would otherwise come back in an order the database was
+// free to change between loads. Ordering a field and then __name__ is
+// served by the field's single-field index, so this query needs no
+// composite index — nothing to declare in Terraform, and nothing to
+// forget to declare.
+func (s *Store) Load(ctx context.Context) iter.Seq2[domain.Event, error] {
+	return func(yield func(domain.Event, error) bool) {
+		docs := s.events.
+			OrderBy(recordedAtField, firestore.Asc).
+			OrderBy(firestore.DocumentID, firestore.Asc).
+			Documents(ctx)
+		// Releases the stream both when the log runs out and when the
+		// consumer breaks out of the range early.
+		defer docs.Stop()
+
+		for {
+			snap, err := docs.Next()
+			if errors.Is(err, iterator.Done) {
+				return
+			}
+			if err != nil {
+				// A fold that was cancelled is the caller's own doing; a
+				// fold that failed is the database's. Consumers have to be
+				// able to tell those apart — one is a request that went
+				// away, the other is an outage — and the gRPC status the
+				// iterator returns here says "Canceled" without unwrapping
+				// to context.Canceled, so ask the context directly.
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					yield(domain.Event{}, fmt.Errorf("eventlog: loading events: %w", ctxErr))
+					return
+				}
+				yield(domain.Event{}, fmt.Errorf("eventlog: loading events: %w", err))
+				return
+			}
+
+			e, err := decodeEvent(snap)
+			if err != nil {
+				yield(domain.Event{}, err)
+				return
+			}
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
+}
+
+// eventDoc is the persisted shape of a domain.Event: the schema of a
+// document in the events collection.
+//
+// It is spelled out separately from the domain type on purpose. These
+// field names are written into an immutable log — every document already
+// in the database is stuck with them — so they must not move when a Go
+// field is renamed. It also keeps money.Cents out of the persistence
+// contract: what is stored is a plain int64 of cents, which is what
+// makes the amount readable by anything that opens the database, not
+// just by this binary.
+//
+// The ID is not a field: it is the document's own ID.
+type eventDoc struct {
+	Action      string    `firestore:"action"`
+	Month       string    `firestore:"month"`
+	Type        string    `firestore:"type"`
+	AmountCents int64     `firestore:"amount_cents"`
+	Direction   string    `firestore:"direction"`
+	Note        string    `firestore:"note"`
+	RefEventID  string    `firestore:"ref_event_id"`
+	RecordedAt  time.Time `firestore:"recorded_at"`
+}
+
+// recordedAtField is the primary sort key of the log, named as Firestore
+// sees it. It is the one field name a query has to know, and it has to
+// agree with the struct tag above.
+const recordedAtField = "recorded_at"
+
+func newEventDoc(e domain.Event) eventDoc {
+	return eventDoc{
+		Action:      string(e.Action),
+		Month:       e.Month,
+		Type:        e.Type,
+		AmountCents: int64(e.Amount),
+		Direction:   string(e.Direction),
+		Note:        e.Note,
+		RefEventID:  e.RefEventID,
+		RecordedAt:  e.RecordedAt,
+	}
+}
+
+// decodeEvent turns a document back into an event, and refuses to return
+// one it cannot vouch for.
+//
+// Validating on the way out looks redundant — Append validated on the way
+// in — but the two guard different things. Append guards against this
+// build writing nonsense; this guards against reading nonsense that
+// something else wrote: an older schema, a hand-edited document, a
+// half-finished import. A fold is a sum, so a bad document does not fail
+// loudly, it makes a total that is quietly wrong — an unknown action
+// folds as neither an add nor a set, a month that is not a month sums
+// into a period that does not exist. The document ID travels with the
+// error, because the only way to deal with a bad document in an
+// append-only log is to go and look at it.
+//
+// It has two blind spots, and they are worth naming.
+//
+// A document with no recorded_at field at all never gets here. Firestore's
+// ordered query returns only documents that have the field it orders by,
+// so such a document is invisible to Load rather than rejected by it — it
+// would be left silently out of every fold.
+//
+// A document with no amount_cents field decodes to zero and is accepted,
+// because zero is a legal amount: a set of zero is how a type is zeroed
+// out for a month, so there is no value of the field that Validate could
+// treat as missing. A missing amount is only distinguishable from a zero
+// one at the document level, not the event level.
+//
+// Nothing this package writes can produce either document; keeping
+// anything else from writing one is a job for the Firestore security
+// rules, in the deploy story.
+func decodeEvent(snap *firestore.DocumentSnapshot) (domain.Event, error) {
+	var doc eventDoc
+	if err := snap.DataTo(&doc); err != nil {
+		return domain.Event{}, fmt.Errorf("eventlog: decoding event %s: %w", snap.Ref.ID, err)
+	}
+
+	e := domain.Event{
+		ID:         snap.Ref.ID,
+		Action:     domain.Action(doc.Action),
+		Month:      doc.Month,
+		Type:       doc.Type,
+		Amount:     money.Cents(doc.AmountCents),
+		Direction:  domain.Direction(doc.Direction),
+		Note:       doc.Note,
+		RefEventID: doc.RefEventID,
+		RecordedAt: doc.RecordedAt,
+	}.Normalize()
+
+	if err := e.Validate(); err != nil {
+		return domain.Event{}, fmt.Errorf("eventlog: event %s: %w", snap.Ref.ID, err)
+	}
+	return e, nil
 }
 
 // Check proves the store can reach Firestore in both directions: it

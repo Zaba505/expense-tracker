@@ -13,7 +13,10 @@ package eventlog_test
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +30,7 @@ const emulatorProject = "test-expense-tracker"
 // skipping the test when there isn't one — an emulator-less `go test
 // -tags integration` should say why it did nothing, not hang dialing a
 // service that is not there.
-func newStore(t *testing.T) *eventlog.Store {
+func newStore(t *testing.T, projectID string) *eventlog.Store {
 	t.Helper()
 
 	host := os.Getenv("FIRESTORE_EMULATOR_HOST")
@@ -36,7 +39,7 @@ func newStore(t *testing.T) *eventlog.Store {
 	}
 
 	store, err := eventlog.New(t.Context(), eventlog.Options{
-		ProjectID:    emulatorProject,
+		ProjectID:    projectID,
 		EmulatorHost: host,
 	})
 	if err != nil {
@@ -50,13 +53,71 @@ func newStore(t *testing.T) *eventlog.Store {
 	return store
 }
 
+// TestStore is the Firestore half of the EventStore contract: the suite
+// Memory runs, run against a real database. It is where the claims only a
+// database can break get checked — that the ordering query is one
+// Firestore will actually serve, and serve without a composite index;
+// that an event survives the round-trip through the document schema with
+// every field intact; and that the log's order stays total when the IDs
+// breaking its ties are ones Firestore invented at random rather than
+// ones a counter handed out in order.
+func TestStore(t *testing.T) {
+	runEventStoreConformance(t, func(t *testing.T) eventlog.EventStore {
+		// A project per subtest, because the emulator namespaces data by
+		// project and Load reads the whole log: one shared project would
+		// have every subtest folding in the events of the ones before it.
+		// The emulator conjures a database on first use, so an extra
+		// project costs a name and nothing else.
+		return newStore(t, isolatedProject(t))
+	})
+}
+
+// isolatedProject invents a project ID for one subtest: a legal one
+// (lowercase, dashes, 30 characters at the outside) that no sibling
+// subtest and no earlier run of this suite has used.
+//
+// The test's name goes in so that data left in the emulator can be traced
+// back to what wrote it. The random suffix goes in because the emulator
+// outlives the test run — `dagger call emulator up` holds one open across
+// many — and a second run of a test must not fold in the events its first
+// run left lying there.
+func isolatedProject(t *testing.T) string {
+	t.Helper()
+
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		t.Fatalf("generating a project suffix: %v", err)
+	}
+
+	name := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		default:
+			return '-'
+		}
+	}, t.Name())
+
+	// Keep the tail of the name when it will not fit: the front is
+	// "teststore-", the same for every subtest, and the end is the part
+	// that says which subtest this is.
+	const maxName = 30 - len("test-") - len("-00112233")
+	if len(name) > maxName {
+		name = name[len(name)-maxName:]
+	}
+
+	return fmt.Sprintf("test-%s-%x", name, suffix)
+}
+
 // TestCheck is the readiness probe against a real database: it proves the
 // client is wired to something that accepts a write and serves it back.
 func TestCheck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
-	store := newStore(t)
+	store := newStore(t, emulatorProject)
 
 	if err := store.Check(ctx); err != nil {
 		t.Fatalf("Check against the emulator: %v", err)
@@ -94,43 +155,5 @@ func TestCheck_Unreachable(t *testing.T) {
 
 	if err := store.Check(ctx); err == nil {
 		t.Fatal("Check against a dead address returned nil, want an error")
-	}
-}
-
-// TestEvents_AppendAndRead is the story's acceptance criterion end to end:
-// the app can append to the event log and read it back, locally, against
-// the same client it will use in the cloud.
-func TestEvents_AppendAndRead(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-
-	store := newStore(t)
-
-	type event struct {
-		Action      string `firestore:"action"`
-		Month       string `firestore:"month"`
-		Type        string `firestore:"type"`
-		AmountCents int64  `firestore:"amount_cents"`
-	}
-	want := event{Action: "add", Month: "2026-07", Type: "Groceries", AmountCents: 4_231}
-
-	// An auto-id document, the shape the real append path will use: the
-	// log is append-only, so nothing here names a document to overwrite.
-	ref, _, err := store.Events().Add(ctx, want)
-	if err != nil {
-		t.Fatalf("appending an event: %v", err)
-	}
-
-	snap, err := ref.Get(ctx)
-	if err != nil {
-		t.Fatalf("reading back event %s: %v", ref.ID, err)
-	}
-
-	var got event
-	if err := snap.DataTo(&got); err != nil {
-		t.Fatalf("decoding event %s: %v", ref.ID, err)
-	}
-	if got != want {
-		t.Errorf("event round-tripped as %+v, want %+v", got, want)
 	}
 }
