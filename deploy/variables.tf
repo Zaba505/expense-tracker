@@ -99,7 +99,12 @@ variable "github_repository" {
   default     = "Zaba505/expense-tracker"
 
   validation {
-    condition     = can(regex("^[^/[:space:]]+/[^/[:space:]]+$", var.github_repository))
-    error_message = "github_repository must be in owner/name form."
+    # GitHub's actual character set, not merely "has a slash in it". The value
+    # is interpolated into the CEL condition and the principalSet in wif.tf,
+    # and the narrowest thing that can be true of a trust boundary is the best
+    # thing to assert about it. It also rejects the likeliest typo — pasting
+    # the URL rather than the repository.
+    condition     = can(regex("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$", var.github_repository))
+    error_message = "github_repository must be in owner/name form, using only the characters GitHub allows: letters, digits and hyphen in the owner; also underscore and period in the name."
   }
 }

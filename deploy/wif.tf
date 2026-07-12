@@ -38,7 +38,13 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 
   # Only tokens GitHub issued for this repository are accepted, whatever else
   # they claim.
-  attribute_condition = "assertion.repository == '${var.github_repository}'"
+  #
+  # jsonencode, not a hand-quoted interpolation: this string is CEL that GCP
+  # evaluates, and quoting a value into a language by hand is how injection
+  # happens. The variable is validated to owner/name form so there is nothing
+  # to inject today — but the trust boundary of the entire keyless deploy
+  # should not rest on a pair of apostrophes staying ahead of its input.
+  attribute_condition = "assertion.repository == ${jsonencode(var.github_repository)}"
 
   # google.subject is what shows up in the audit log, so it is the token's
   # own subject — "repo:owner/name:ref:refs/heads/main" — and an audit entry

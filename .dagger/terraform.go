@@ -36,12 +36,22 @@ import (
 // Federation, so neither this repo nor CI ever holds a static cloud key.
 
 const (
-	// terraformImage pins the CLI. Bump it deliberately: a Terraform minor
-	// upgrades the state file on first write, and the state is shared.
-	terraformImage = "hashicorp/terraform:1.15"
+	// terraformImage pins the CLI, and the digest is the pin: a minor tag like
+	// `1.15` tracks the latest patch and moves whenever one ships, so it
+	// reproduces nothing. Terraform is the one tool here where that matters —
+	// it upgrades the state file on first write, and the state is shared, so a
+	// patch that arrives on its own is a change to production state that no
+	// commit records.
+	//
+	// The tag rides along to say which version the digest is. Bump both
+	// together, deliberately.
+	terraformImage = "hashicorp/terraform:1.15.8@sha256:7ae513256f7ce67879e218ae8593d6fbe216ec9e123abe6c94e4e10704857963"
 
 	// gcloudImage is only used to create the state bucket, which Terraform
-	// cannot create for itself (see stateBucket).
+	// cannot create for itself (see stateBucket). It floats on :stable, and
+	// unlike Terraform that is the right trade: it runs one idempotent
+	// command, it owns no state, and it handles a credential — so patches are
+	// worth more here than byte-identical reruns.
 	gcloudImage = "gcr.io/google.com/cloudsdktool/google-cloud-cli:stable"
 
 	// tfDir is where the root module is mounted in the container.
