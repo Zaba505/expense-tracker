@@ -20,7 +20,7 @@ internal/
   config/        env-driven config, fails fast on missing required values
   money/         integer-cents money type
   domain/        Event and the event-sourcing vocabulary
-  eventlog/      append-only EventStore (Firestore + in-memory)
+  eventlog/      Firestore-backed append-only event store
   projection/    Fold(events) -> state, rollups, known-types, yearly grid
   web/           net/http ServeMux, handlers, auth middleware, the server
   view/          templ components + the assets' URL space
@@ -43,6 +43,28 @@ every problem at once:
 | `PORT`                    | no       | `8080`  | HTTP listen port (Cloud Run injects this)          |
 | `FIRESTORE_EMULATOR_HOST` | no       | —       | when set, use a local Firestore emulator           |
 
+## Event log
+
+`internal/eventlog` is the Firestore client: one `Store`, used unchanged in
+both environments. It authenticates to the live service with **Application
+Default Credentials**, or talks to a **local emulator** when
+`FIRESTORE_EMULATOR_HOST` is set — the app never learns which.
+
+Connecting is lazy, so a Firestore that is down does not stop the server
+from booting; it makes it report itself unready. That is what the two
+probes are for, and why there are two:
+
+| Probe                   | Answers                            | What the platform does with a failure |
+| ----------------------- | ---------------------------------- | ------------------------------------- |
+| `GET /health/liveness`  | is the process up?                 | restarts the container                |
+| `GET /health/readiness` | can it reach the event log?        | holds traffic back, container survives |
+
+Readiness round-trips a document through `meta/health` — it writes, then
+reads back what it wrote, because a write alone would not catch a database
+that accepts writes but cannot serve reads. Liveness deliberately touches
+nothing: restarting the container cannot fix a database that is down, so
+folding Firestore into liveness would turn a blip into a restart loop.
+
 ## Front end
 
 HTML is rendered on the server with [templ](https://templ.guide) and made
@@ -51,16 +73,12 @@ Both front-end assets are **vendored into `static/` and embedded into the
 binary** (`go:embed`, see `embed.go`), never pulled from a CDN: a deployed
 container is self-contained.
 
-| Route          | Serves                                                     |
-| -------------- | ---------------------------------------------------------- |
-| `GET /`        | the home page (a placeholder until the entry stories land)  |
-| `GET /healthz` | `200 ok`                                                    |
-| `GET /static/` | the embedded htmx + CSS                                     |
-
-`/healthz` is a **liveness** probe: it reports that the process is up and
-serving, and deliberately does not reach out to Firestore, so a slow or
-failing dependency cannot get an otherwise-healthy container killed and
-restarted into the same failure.
+| Route                     | Serves                                                    |
+| ------------------------- | --------------------------------------------------------- |
+| `GET /`                   | the home page (a placeholder until the entry stories land) |
+| `GET /health/liveness`    | `200 ok`                                                   |
+| `GET /health/readiness`   | `200` / `503` + JSON, after a Firestore round-trip         |
+| `GET /static/`            | the embedded htmx + CSS                                    |
 
 htmx is vendored at **2.0.7**. To move to a new version, replace the file
 and update that number here:
@@ -98,6 +116,9 @@ container runtime (Docker or Podman). Run everything from the repo root.
 | build the importer image    | `dagger call importer-image export --path ./importer.tar` |
 | full CI pipeline (both)     | `dagger call ci`                                        |
 | publish (CI, on `main`)     | `dagger call ci --registry=<host> --auth=env:REG_TOKEN` |
+| run the app + its deps      | `dagger call run-against local up --ports 8080:8080`    |
+| a Firestore emulator alone  | `dagger call emulator --seed up --ports 8085:8085`      |
+| emulator-backed tests       | `dagger call integration-test`                          |
 
 - **`check`** runs the shared z5labs stages once — `gofmt`, `go vet`,
   `golangci-lint`, `go test -race` — and builds nothing. Fast PR gate.
@@ -111,30 +132,57 @@ container runtime (Docker or Podman). Run everything from the repo root.
   multi-arch scratch build, and — when `--registry` is set and HEAD's ref
   matches z5labs' `publishOn` filter (default `^refs/heads/main$`) — a
   publish. With no `--registry` it's a checks + build gate, safe anywhere.
+- **`run-against local`** is the run configuration (see below).
+- **`emulator`** is a Firestore emulator on its own, as a Dagger service.
+  `--seed` fills it with a couple of months of sample events; `up --ports
+  8085:8085` publishes it on the host. Its data lives only as long as the
+  service does.
+- **`integration-test`** runs the emulator-backed tests (`//go:build
+  integration`) against an emulator bound into the test container. It needs
+  no host emulator and no host ports, so CI can run it as-is.
 
 > The z5labs pipeline deliberately does **not** run `templ generate` or a
-> Firestore emulator. CI keeps a `templ`-diff pre-step, and emulator-backed
-> tests are build-tagged (`//go:build integration`) and run separately.
+> Firestore emulator. CI keeps a `templ`-diff pre-step, and the
+> emulator-backed tests are build-tagged out of `dagger call check` — they
+> are what `dagger call integration-test` runs.
 
-### Run locally
+### Run locally — `run-against local`
 
-The binary loads config from the environment. Against the Firestore
-emulator:
+The app's **run configuration lives in the Dagger module**, not in a README
+you re-enact by hand: `RunAgainst` says what the app needs to run and how
+its dependencies are wired, and one command brings all of it up. It is what
+this repo has instead of a compose file.
 
 ```sh
-export GCP_PROJECT=demo-local
-export OWNER_EMAIL=you@example.com
-export FIRESTORE_EMULATOR_HOST=localhost:8181
-
-dagger call server-binary -o ./bin/server
-./bin/server
+dagger call run-against local up --ports 8080:8080
 ```
 
-Or, for a fast edit loop, plain Go works too (same module, same config):
+That stands up a Firestore emulator, writes a sample event log into it, and
+runs the server against it — **the same scratch container CI builds and
+publishes**, not `go run`. The app lands on `localhost:8080`; the emulator
+stays inside, reachable only from the app. `curl localhost:8080/health/readiness`
+returning `200` means the container wrote to the emulator and read it back.
+
+The seed lives in the run configuration too (`.dagger/seed.go`), because
+sample data is a property of *how you run this locally*, not of the product
+— there is no seeder binary to ship or to remember to run. It cannot touch
+real Firestore, either: it only ever talks to an emulator the chain started
+itself, which matters because an append-only log has no undo.
+
+For a faster edit loop, run the app from source against a published
+emulator instead:
 
 ```sh
+dagger call emulator --seed up --ports 8085:8085     # one shell
+
+export GCP_PROJECT=demo-expense-tracker              # another
+export OWNER_EMAIL=you@example.com
+export FIRESTORE_EMULATOR_HOST=localhost:8085
 go run ./cmd/server
 ```
+
+`FIRESTORE_EMULATOR_HOST` is the only difference between that and
+production.
 
 ### Regenerate templ
 

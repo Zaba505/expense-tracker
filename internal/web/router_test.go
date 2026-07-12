@@ -1,6 +1,8 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -9,9 +11,22 @@ import (
 	"testing"
 )
 
-// testHandler is the real routing table, with logs thrown away.
+// stubChecker stands in for the event store: the routing tests care that
+// a dependency was consulted, not which one.
+type stubChecker struct {
+	err    error
+	called int
+}
+
+func (s *stubChecker) Check(context.Context) error {
+	s.called++
+	return s.err
+}
+
+// testHandler is the real routing table, with logs thrown away and a
+// dependency that is always healthy.
 func testHandler() http.Handler {
-	return NewHandler(slog.New(slog.DiscardHandler))
+	return NewHandler(slog.New(slog.DiscardHandler), &stubChecker{})
 }
 
 // get runs a request against the real handler in-process, no listener.
@@ -27,31 +42,51 @@ func do(t *testing.T, method, path string) *httptest.ResponseRecorder {
 	return rec
 }
 
-func TestHealthz(t *testing.T) {
+func TestLiveness(t *testing.T) {
 	t.Parallel()
 
-	rec := get(t, "/healthz")
+	rec := get(t, "/health/liveness")
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("GET /healthz status = %d, want %d", rec.Code, http.StatusOK)
+		t.Errorf("GET /health/liveness status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	if got := rec.Body.String(); got != "ok" {
-		t.Errorf("GET /healthz body = %q, want %q", got, "ok")
+		t.Errorf("GET /health/liveness body = %q, want %q", got, "ok")
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
-		t.Errorf("GET /healthz Content-Type = %q, want text/plain", got)
+		t.Errorf("GET /health/liveness Content-Type = %q, want text/plain", got)
 	}
 }
 
-// TestHealthz_RejectsNonGET pins the method to GET: the probe is a read,
-// and ServeMux's "GET /healthz" pattern is what enforces it.
-func TestHealthz_RejectsNonGET(t *testing.T) {
+// TestLiveness_IgnoresDependencies is the whole point of splitting the two
+// probes: liveness must pass while Firestore is down, because restarting
+// the container — which is what a failed liveness probe causes — cannot
+// bring a database back.
+func TestLiveness_IgnoresDependencies(t *testing.T) {
 	t.Parallel()
 
-	rec := do(t, http.MethodPost, "/healthz")
+	store := &stubChecker{err: errors.New("firestore is down")}
+	rec := httptest.NewRecorder()
+	NewHandler(slog.New(slog.DiscardHandler), store).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/liveness", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /health/liveness with a dead dependency = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if store.called != 0 {
+		t.Errorf("liveness consulted the event store %d times, want 0", store.called)
+	}
+}
+
+// TestLiveness_RejectsNonGET pins the method to GET: the probe is a read,
+// and ServeMux's "GET /health/liveness" pattern is what enforces it.
+func TestLiveness_RejectsNonGET(t *testing.T) {
+	t.Parallel()
+
+	rec := do(t, http.MethodPost, "/health/liveness")
 
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("POST /healthz status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+		t.Errorf("POST /health/liveness status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
 
