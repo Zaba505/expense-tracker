@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,9 +132,11 @@ func runEventStoreConformance(t *testing.T, newStore storeFactory) {
 			ctx, cancel := context.WithCancel(t.Context())
 			cancel()
 
-			if _, err := store.Append(ctx, event()); !errors.Is(err, context.Canceled) {
+			_, err := store.Append(ctx, event())
+			if !errors.Is(err, context.Canceled) {
 				t.Errorf("Append on a cancelled context gave %v, want context.Canceled", err)
 			}
+			wantAttributed(t, "Append on a cancelled context", err)
 		})
 
 		t.Run("refuses a bad event even on a cancelled context", func(t *testing.T) {
@@ -358,10 +361,30 @@ func runEventStoreConformance(t *testing.T, newStore storeFactory) {
 					if !errors.Is(loadErr, context.Canceled) {
 						t.Errorf("Load on a cancelled context yielded %d events and the error %v, want context.Canceled", loaded, loadErr)
 					}
+					wantAttributed(t, "Load on a cancelled context", loadErr)
 				})
 			}
 		})
 	})
+}
+
+// wantAttributed fails unless err names the package it came from.
+//
+// Matching on a message is usually a brittle test, and this is the one
+// place it earns its keep: it pins the only difference between the stores
+// that errors.Is cannot see. Both stores' errors end up on the same log
+// line, and one that reads "context canceled" and nothing else leaves the
+// reader to guess which of a request's several moving parts gave up.
+// Whether a store wraps or returns ctx.Err() raw is invisible to every
+// other assertion in this suite — the two stores disagreed about exactly
+// that, and every errors.Is here passed anyway.
+func wantAttributed(t *testing.T, op string, err error) {
+	t.Helper()
+
+	const prefix = "eventlog: "
+	if err == nil || !strings.HasPrefix(err.Error(), prefix) {
+		t.Errorf("%s gave the error %v, want it to name the package that produced it (%q...)", op, err, prefix)
+	}
 }
 
 // event is a valid event to append: the tests vary one field of it at a

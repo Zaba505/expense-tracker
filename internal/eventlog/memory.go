@@ -94,7 +94,7 @@ func (m *Memory) Load(ctx context.Context) iter.Seq2[domain.Event, error] {
 		// nothing to check, and quietly hand a cancelled fold a clean
 		// "there are no expenses".
 		if err := ctx.Err(); err != nil {
-			yield(domain.Event{}, err)
+			yield(domain.Event{}, fmt.Errorf("eventlog: loading events: %w", err))
 			return
 		}
 
@@ -119,7 +119,7 @@ func (m *Memory) Load(ctx context.Context) iter.Seq2[domain.Event, error] {
 			// has to as well, or a consumer's cancellation would mean
 			// different things in a test and in production.
 			if err := ctx.Err(); err != nil {
-				yield(domain.Event{}, err)
+				yield(domain.Event{}, fmt.Errorf("eventlog: loading events: %w", err))
 				return
 			}
 			if !yield(e, nil) {

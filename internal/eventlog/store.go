@@ -242,19 +242,29 @@ func newEventDoc(e domain.Event) eventDoc {
 // in — but the two guard different things. Append guards against this
 // build writing nonsense; this guards against reading nonsense that
 // something else wrote: an older schema, a hand-edited document, a
-// half-finished import. A fold is a sum, and an event that decodes to a
-// zero amount or an unknown action is a total that is quietly wrong
-// rather than loudly broken. The document ID travels with the error,
-// because the only way to deal with a bad document in an append-only log
-// is to go and look at it.
+// half-finished import. A fold is a sum, so a bad document does not fail
+// loudly, it makes a total that is quietly wrong — an unknown action
+// folds as neither an add nor a set, a month that is not a month sums
+// into a period that does not exist. The document ID travels with the
+// error, because the only way to deal with a bad document in an
+// append-only log is to go and look at it.
 //
-// It has one blind spot, and it is worth naming: a document with no
-// recorded_at field at all never gets here. Firestore's ordered query
-// returns only documents that have the field it orders by, so such a
-// document is invisible to Load rather than rejected by it — it would be
-// left silently out of every fold. Nothing this package writes can
-// produce one; keeping anything else from writing one is a job for the
-// Firestore security rules, in the deploy story.
+// It has two blind spots, and they are worth naming.
+//
+// A document with no recorded_at field at all never gets here. Firestore's
+// ordered query returns only documents that have the field it orders by,
+// so such a document is invisible to Load rather than rejected by it — it
+// would be left silently out of every fold.
+//
+// A document with no amount_cents field decodes to zero and is accepted,
+// because zero is a legal amount: a set of zero is how a type is zeroed
+// out for a month, so there is no value of the field that Validate could
+// treat as missing. A missing amount is only distinguishable from a zero
+// one at the document level, not the event level.
+//
+// Nothing this package writes can produce either document; keeping
+// anything else from writing one is a job for the Firestore security
+// rules, in the deploy story.
 func decodeEvent(snap *firestore.DocumentSnapshot) (domain.Event, error) {
 	var doc eventDoc
 	if err := snap.DataTo(&doc); err != nil {
