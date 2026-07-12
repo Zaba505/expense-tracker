@@ -24,10 +24,14 @@ import (
 // agreed event shape — an action to fold with, the month it belongs to, a
 // free-form type, integer cents, and a direction.
 //
-// The `firestore` field names in internal/eventlog are the contract this
-// has to match; nothing type-checks the two against each other, because
-// this module cannot import the app's internal packages. A drift shows up
-// as seeded documents that decode to zero values.
+// The app does not declare that shape yet — internal/eventlog names the
+// collection, but the Event type and its `firestore` tags arrive with the
+// append and load operations (#9). Until then the field names writeEvent
+// sends are the whole contract, and that type has to match them, not the
+// other way round. Nothing type-checks the two against each other in
+// either direction, because this module cannot import the app's internal
+// packages: a drift shows up as seeded documents that decode to zero
+// values.
 type seedEvent struct {
 	// id is the document id. Fixed rather than auto-generated, which is
 	// what makes seeding idempotent: the chain seeds on every run, and a
