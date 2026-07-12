@@ -22,6 +22,13 @@
 //	dagger call emulator --seed up --ports 8085:8085    # just the emulator, for a `go run ./cmd/server` loop
 //	dagger call integration-test                        # `go test -tags integration` against its own emulator
 //
+// ...and, on the same principle, the cloud the app runs on: the Terraform in
+// deploy/ is run from a pinned container with an explicit short-lived token,
+// never from a `terraform` on someone's PATH (see terraform.go):
+//
+//	dagger call terraform validate                       # the CI gate; no cloud, no credentials
+//	dagger call terraform --project=… … plan             # and state-bucket / apply / output
+//
 // The z5labs pipeline is deliberately narrow: it has no Firestore to talk
 // to, and it does not run templ. So the emulator-backed tests are
 // build-tagged out of it, and both they and the templ-diff check are their
