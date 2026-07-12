@@ -54,20 +54,22 @@ func Parse(s string) (Cents, error) {
 		return 0, syntaxError(s)
 	}
 
-	neg := false
+	neg, paren := false, false
 	if strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")") {
-		neg = true
+		neg, paren = true, true
 		t = strings.TrimSpace(t[1 : len(t)-1])
 	}
 
 	// The sign and the currency symbol may appear in either order, but
-	// each at most once.
+	// each at most once. Parentheses already carry the sign, so a sign
+	// inside them is not a redundant negative but an ambiguity: "(-5)"
+	// falls through to the digit check below and is rejected.
 	sawSign, sawSymbol := false, false
 prefix:
 	for t != "" {
 		switch {
-		case !sawSign && (t[0] == '-' || t[0] == '+'):
-			neg = neg != (t[0] == '-')
+		case !paren && !sawSign && (t[0] == '-' || t[0] == '+'):
+			neg = t[0] == '-'
 			sawSign = true
 		case !sawSymbol && t[0] == '$':
 			sawSymbol = true

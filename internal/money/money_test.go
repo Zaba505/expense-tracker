@@ -73,6 +73,11 @@ func TestParse_Invalid(t *testing.T) {
 		{"other currency", "€5.00", ErrSyntax},
 		{"two symbols", "$$5", ErrSyntax},
 		{"two signs", "--5", ErrSyntax},
+		// Parens already say "negative"; a sign inside them is ambiguous,
+		// and guessing at it would silently flip the amount.
+		{"negative sign in parens", "(-5)", ErrSyntax},
+		{"positive sign in parens", "(+5)", ErrSyntax},
+		{"sign in parens with symbol", "(-$5.00)", ErrSyntax},
 		{"two points", "1..2", ErrSyntax},
 		{"embedded space", "1 234.56", ErrSyntax},
 		{"three fractional digits", "1.234", ErrSyntax},
