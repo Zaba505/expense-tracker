@@ -16,7 +16,6 @@ log. Money is stored as `int64` cents throughout.
 cmd/
   server/        HTTP application (Cloud Run)
   importer/      one-off: sheet CSV -> events
-  seed/          dev-only: sample events into the local emulator
 internal/
   config/        env-driven config, fails fast on missing required values
   money/         integer-cents money type
@@ -117,7 +116,8 @@ container runtime (Docker or Podman). Run everything from the repo root.
 | build the importer image    | `dagger call importer-image export --path ./importer.tar` |
 | full CI pipeline (both)     | `dagger call ci`                                        |
 | publish (CI, on `main`)     | `dagger call ci --registry=<host> --auth=env:REG_TOKEN` |
-| a Firestore emulator        | `dagger call emulator up --ports 8085:8085`             |
+| run the app + its deps      | `dagger call run-against local up --ports 8080:8080`    |
+| a Firestore emulator alone  | `dagger call emulator --seed up --ports 8085:8085`      |
 | emulator-backed tests       | `dagger call integration-test`                          |
 
 - **`check`** runs the shared z5labs stages once — `gofmt`, `go vet`,
@@ -132,9 +132,11 @@ container runtime (Docker or Podman). Run everything from the repo root.
   multi-arch scratch build, and — when `--registry` is set and HEAD's ref
   matches z5labs' `publishOn` filter (default `^refs/heads/main$`) — a
   publish. With no `--registry` it's a checks + build gate, safe anywhere.
-- **`emulator`** is a Firestore emulator as a Dagger service. `up --ports
-  8085:8085` publishes it on the host, where the app and the seeder reach
-  it; its data lives only as long as the service does.
+- **`run-against local`** is the run configuration (see below).
+- **`emulator`** is a Firestore emulator on its own, as a Dagger service.
+  `--seed` fills it with a couple of months of sample events; `up --ports
+  8085:8085` publishes it on the host. Its data lives only as long as the
+  service does.
 - **`integration-test`** runs the emulator-backed tests (`//go:build
   integration`) against an emulator bound into the test container. It needs
   no host emulator and no host ports, so CI can run it as-is.
@@ -144,42 +146,43 @@ container runtime (Docker or Podman). Run everything from the repo root.
 > emulator-backed tests are build-tagged out of `dagger call check` — they
 > are what `dagger call integration-test` runs.
 
-### Run locally
+### Run locally — `run-against local`
 
-Two shells. In the first, an emulator, published on the host:
+The app's **run configuration lives in the Dagger module**, not in a README
+you re-enact by hand: `RunAgainst` says what the app needs to run and how
+its dependencies are wired, and one command brings all of it up. It is what
+this repo has instead of a compose file.
 
 ```sh
-dagger call emulator up --ports 8085:8085
+dagger call run-against local up --ports 8080:8080
 ```
 
-In the second, the app — pointed at it by `FIRESTORE_EMULATOR_HOST`, which
-is the only difference between this and production:
+That stands up a Firestore emulator, writes a sample event log into it, and
+runs the server against it — **the same scratch container CI builds and
+publishes**, not `go run`. The app lands on `localhost:8080`; the emulator
+stays inside, reachable only from the app. `curl localhost:8080/health/readiness`
+returning `200` means the container wrote to the emulator and read it back.
+
+The seed lives in the run configuration too (`.dagger/seed.go`), because
+sample data is a property of *how you run this locally*, not of the product
+— there is no seeder binary to ship or to remember to run. It cannot touch
+real Firestore, either: it only ever talks to an emulator the chain started
+itself, which matters because an append-only log has no undo.
+
+For a faster edit loop, run the app from source against a published
+emulator instead:
 
 ```sh
-export GCP_PROJECT=demo-expense-tracker
+dagger call emulator --seed up --ports 8085:8085     # one shell
+
+export GCP_PROJECT=demo-expense-tracker              # another
 export OWNER_EMAIL=you@example.com
 export FIRESTORE_EMULATOR_HOST=localhost:8085
-
-go run ./cmd/seed      # optional: a couple of months of sample events
 go run ./cmd/server
 ```
 
-Then `curl localhost:8080/health/readiness` — a `200` means the app wrote
-to the emulator and read it back.
-
-The emulator starts empty and forgets everything when it stops, so
-`cmd/seed` is there to give a fresh one something in it. It refuses to run
-unless `FIRESTORE_EMULATOR_HOST` is set, because an append-only log has no
-undo and sample data in the real one would be permanent. Re-running it is
-safe: the seed documents have fixed ids, so a second run overwrites rather
-than duplicates.
-
-To run the deployed artifact rather than `go run`, build it first — same
-environment, same behaviour:
-
-```sh
-dagger call server-binary -o ./bin/server && ./bin/server
-```
+`FIRESTORE_EMULATOR_HOST` is the only difference between that and
+production.
 
 ### Regenerate templ
 
