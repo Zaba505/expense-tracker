@@ -29,6 +29,7 @@ embed.go         the go:embed of static/ (only the root package can reach it)
 deploy/          Terraform (Firestore, Cloud Run, Artifact Registry, ...)
 .dagger/         this repo's Dagger module (thin wrapper over z5labs)
 dagger.json      pins the shared z5labs build module
+.github/         CI: one `dagger call` per check, nothing built by hand
 ```
 
 ## Configuration
@@ -110,6 +111,7 @@ container runtime (Docker or Podman). Run everything from the repo root.
 | Goal (old make target)      | Dagger command                                          |
 | --------------------------- | ------------------------------------------------------- |
 | run checks + tests (`test`) | `dagger call check`                                     |
+| generated templ is in sync  | `dagger call templ-check`                               |
 | build the server binary     | `dagger call server-binary -o ./bin/server`             |
 | build the importer binary   | `dagger call importer-binary -o ./bin/importer`         |
 | build the server image      | `dagger call server-image export --path ./server.tar`   |
@@ -122,6 +124,9 @@ container runtime (Docker or Podman). Run everything from the repo root.
 
 - **`check`** runs the shared z5labs stages once — `gofmt`, `go vet`,
   `golangci-lint`, `go test -race` — and builds nothing. Fast PR gate.
+- **`templ-check`** re-runs `templ generate` and fails if the result differs
+  from what is committed, printing the file that drifted. It compares
+  content, not write times.
 - **`server-binary` / `importer-binary`** return the compiled binary as a
   file; `-o <path>` writes it locally. This is byte-for-byte the artifact
   CI publishes (single-arch for your host), via `GoApp.Builder().Binary`.
@@ -142,9 +147,42 @@ container runtime (Docker or Podman). Run everything from the repo root.
   no host emulator and no host ports, so CI can run it as-is.
 
 > The z5labs pipeline deliberately does **not** run `templ generate` or a
-> Firestore emulator. CI keeps a `templ`-diff pre-step, and the
-> emulator-backed tests are build-tagged out of `dagger call check` — they
-> are what `dagger call integration-test` runs.
+> Firestore emulator. That is why `templ-check` and `integration-test` are
+> functions of their own: the emulator-backed tests are build-tagged out of
+> `check`, and the templ diff is what keeps the committed `*_templ.go`
+> honest. CI runs each as its own leg.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`. It
+supplies a runner and a fan-out and nothing else — each leg is one of the
+commands above, so whatever CI catches you reproduce with the same
+`dagger call`, and there is no second, CI-only definition of the build to
+drift from this one:
+
+| CI leg                      | Command                        |
+| --------------------------- | ------------------------------ |
+| templ generate is committed | `dagger call templ-check`      |
+| fmt, vet, lint, test, build | `dagger call ci`               |
+| Firestore integration tests | `dagger call integration-test` |
+
+The legs run in parallel and report independently (`fail-fast: false`), so a
+lint failure cannot hide a broken integration test — you fix them in one
+pass, not two. No `--registry` is passed, so `ci` builds both images and
+publishes nothing; publishing is deploy-time and belongs to the deploy
+story.
+
+`DAGGER_VERSION` in the workflow must equal `engineVersion` in `dagger.json`
+— the run fails fast if they drift, since the CLI provisions the engine of
+its own version and a mismatch would run the module against an engine it was
+not generated for. Bump both together. The workflow caches the engine image
+so a run does not re-pull it.
+
+One sharp edge: `dagger call ci` needs a real `.git` **directory**, because
+the z5labs pipeline reads the refs at `HEAD` to decide whether to publish. It
+therefore fails from inside a `git worktree`, where `.git` is a file pointing
+at the parent repo. Run it from a normal clone; `check`, `templ-check`, and
+`integration-test` do not care.
 
 ### Run locally — `run-against local`
 
@@ -195,9 +233,9 @@ go tool templ generate
 
 Unlike the Dagger codegen below, the generated `*_templ.go` files **are
 committed**: the build pipeline deliberately does not run `templ generate`,
-so a fresh checkout has to already compile. CI re-runs the command and
-fails if the result differs from what was committed — if that trips, you
-edited a `.templ` without regenerating.
+so a fresh checkout has to already compile. CI re-runs the command
+(`dagger call templ-check`) and fails if the result differs from what was
+committed — if that trips, you edited a `.templ` without regenerating.
 
 ### Working on the Dagger module itself
 
