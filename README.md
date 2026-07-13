@@ -58,7 +58,8 @@ cannot work. Generate a session key with `openssl rand -base64 32`.
 `internal/auth` signs the owner in with Google over ordinary OIDC:
 `GET /auth/login` mints a state and a nonce and redirects to Google;
 `GET /auth/callback` checks the state, redeems the code, verifies the ID
-token's signature, issuer, audience and nonce, and sets a session cookie.
+token's signature, issuer, audience and nonce, and sets a signed session
+cookie; `GET /logout` clears that cookie.
 
 The session **is** the cookie — there is no session store. That fits the
 deployment rather than saving a table: the app scales to zero across
@@ -77,10 +78,10 @@ and on a Cloud Run URL that did not exist when the config was written — the
 URL is an *output* of creating the service. Set it only behind a custom
 domain whose host is not the one reaching the container.
 
-Authenticating is not authorizing: this hands a session to any Google
-account with a verified email, because no route requires one yet. The owner
-allowlist, the middleware that enforces it, and logout are
-[#14](https://github.com/Zaba505/expense-tracker/issues/14).
+`internal/web` is the app's authorization gate: one middleware allows the
+public auth and health routes through, and rejects every other route unless
+the session's email matches `OWNER_EMAIL`. That middleware is also the one
+swap point for a future move from signed-cookie sessions to IAP.
 
 ## Event log
 

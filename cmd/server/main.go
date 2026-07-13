@@ -96,5 +96,5 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		slog.Bool("firestore_emulator", cfg.UsesEmulator()),
 	)
 
-	return web.Serve(ctx, lis, web.NewHandler(logger, store, authn), logger)
+	return web.Serve(ctx, lis, web.NewHandler(logger, store, cfg.OwnerEmail, authn), logger)
 }

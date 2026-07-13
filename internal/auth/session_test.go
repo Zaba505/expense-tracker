@@ -224,6 +224,44 @@ func TestSetSession_MaxAgeAgreesWithTheExpiry(t *testing.T) {
 	}
 }
 
+func TestLogout_ClearsSession(t *testing.T) {
+	t.Parallel()
+
+	a := newFakeGoogle(t).authenticator(t, nil)
+
+	r := httptest.NewRequest(http.MethodGet, LogoutPath, nil)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	a.LogoutHandler().ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("GET %s = %d, want %d", LogoutPath, rec.Code, http.StatusSeeOther)
+	}
+	if got := rec.Header().Get("Location"); got != LoginPath {
+		t.Errorf("logout redirected to %q, want %q", got, LoginPath)
+	}
+
+	cookie := findCookie(t, rec.Result().Cookies(), sessionCookie)
+	if cookie.MaxAge >= 0 {
+		t.Errorf("logout cookie Max-Age = %d, want a negative value to expire it", cookie.MaxAge)
+	}
+	if cookie.Value != "" {
+		t.Errorf("logout cookie value = %q, want empty", cookie.Value)
+	}
+	if !cookie.HttpOnly {
+		t.Error("logout cookie is readable by scripts")
+	}
+	if !cookie.Secure {
+		t.Error("logout cookie is not Secure on an https request")
+	}
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("logout cookie SameSite = %v, want Lax", cookie.SameSite)
+	}
+	if cookie.Path != "/" {
+		t.Errorf("logout cookie Path = %q, want %q", cookie.Path, "/")
+	}
+}
+
 // TestNew_RejectsAWeakKey: HMAC-SHA256 is worth exactly what its key is
 // worth, and a passphrase somebody typed is not worth 256 bits. The app
 // refuses to start rather than sign sessions with one — which is the same
