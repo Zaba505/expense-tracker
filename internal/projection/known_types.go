@@ -16,8 +16,8 @@ type KnownType struct {
 // must pass events already in log order. The result is newest first, and each
 // type appears once with the Month from its last event.
 func KnownTypes(events []domain.Event) []KnownType {
-	known := make([]KnownType, 0, len(events))
-	seen := make(map[string]struct{}, len(events))
+	var known []KnownType
+	seen := make(map[string]struct{})
 
 	for i := len(events) - 1; i >= 0; i-- {
 		e := events[i].Normalize()
