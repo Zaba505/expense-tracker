@@ -29,6 +29,7 @@ func (s *stubChecker) Check(context.Context) error {
 	return s.err
 }
 
+// stubAuth is a test double for the router's authenticator dependency.
 type stubAuth struct {
 	session            auth.Session
 	hasSession         bool

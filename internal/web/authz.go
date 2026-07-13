@@ -15,10 +15,12 @@ type authenticator interface {
 	LogoutHandler() http.Handler
 }
 
-// requireOwner is the application's one authorization gate. Today it enforces
-// the owner allowlist by requiring a session whose email matches OWNER_EMAIL;
-// if the app later switches to IAP, this middleware is the one place to swap
-// the session check for whatever assertion IAP provides.
+// requireOwner is the application's one authorization gate. It lets the auth
+// flow and health probes through unchanged, serves protected routes only to a
+// session whose email matches OWNER_EMAIL, clears non-owner sessions before
+// redirecting them back to sign in, and sends callers with no valid session to
+// the login route. If the app later switches to IAP, this middleware is the
+// one place to swap the session check for whatever assertion IAP provides.
 func requireOwner(logger *slog.Logger, ownerEmail string, authn authenticator, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isPublicPath(r.URL.Path) {
@@ -45,6 +47,8 @@ func requireOwner(logger *slog.Logger, ownerEmail string, authn authenticator, n
 	})
 }
 
+// isPublicPath reports whether path bypasses authorization because it is part
+// of the public auth flow or a health probe the platform must reach.
 func isPublicPath(path string) bool {
 	switch path {
 	case auth.LoginPath, auth.CallbackPath, healthzPath, livenessPath, readinessPath:
