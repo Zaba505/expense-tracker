@@ -47,7 +47,7 @@ func requireOwner(logger *slog.Logger, ownerEmail string, authn authenticator, n
 
 func isPublicPath(path string) bool {
 	switch path {
-	case auth.LoginPath, auth.CallbackPath, auth.LogoutPath, healthzPath, livenessPath, readinessPath:
+	case auth.LoginPath, auth.CallbackPath, healthzPath, livenessPath, readinessPath:
 		return true
 	default:
 		return false

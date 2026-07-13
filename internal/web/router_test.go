@@ -30,15 +30,15 @@ func (s *stubChecker) Check(context.Context) error {
 }
 
 type stubAuth struct {
-	session      auth.Session
-	hasSession   bool
-	logoutCalled int
+	session            auth.Session
+	hasSession         bool
+	clearSessionCalled int
 }
 
 func (s *stubAuth) Session(*http.Request) (auth.Session, bool) { return s.session, s.hasSession }
 
 func (s *stubAuth) ClearSession(w http.ResponseWriter, r *http.Request) {
-	s.logoutCalled++
+	s.clearSessionCalled++
 	http.SetCookie(w, &http.Cookie{
 		Name:   "cleared",
 		Value:  "",
@@ -220,8 +220,8 @@ func TestHome_NonOwnerSessionIsLoggedOut(t *testing.T) {
 	if got := rec.Header().Get("Location"); got != auth.LoginPath {
 		t.Errorf("GET / redirected to %q, want %q", got, auth.LoginPath)
 	}
-	if authn.logoutCalled != 1 {
-		t.Fatalf("logout handler called %d times, want 1", authn.logoutCalled)
+	if authn.clearSessionCalled != 1 {
+		t.Fatalf("ClearSession called %d times, want 1", authn.clearSessionCalled)
 	}
 	for _, c := range rec.Result().Cookies() {
 		if c.MaxAge < 0 {
@@ -250,13 +250,20 @@ func TestAuthRoutesAreMounted(t *testing.T) {
 func TestLogoutRouteIsMounted(t *testing.T) {
 	t.Parallel()
 
-	rec := get(t, auth.LogoutPath)
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), auth.LogoutPath)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("GET %s = %d, want %d", auth.LogoutPath, rec.Code, http.StatusSeeOther)
 	}
 	if got := rec.Header().Get("Location"); got != auth.LoginPath {
 		t.Errorf("GET %s redirected to %q, want %q", auth.LogoutPath, got, auth.LoginPath)
+	}
+	if authn.clearSessionCalled != 1 {
+		t.Fatalf("ClearSession called %d times, want 1", authn.clearSessionCalled)
 	}
 }
 
