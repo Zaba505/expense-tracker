@@ -29,7 +29,7 @@ func TestReadiness_Healthy(t *testing.T) {
 
 	store := &stubChecker{}
 	rec := httptest.NewRecorder()
-	NewHandler(slog.New(slog.DiscardHandler), store).
+	NewHandler(slog.New(slog.DiscardHandler), store, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/readiness", nil))
 
 	if rec.Code != http.StatusOK {
@@ -60,7 +60,7 @@ func TestReadiness_Unreachable(t *testing.T) {
 
 	store := &stubChecker{err: errors.New("dial firestore: connection refused")}
 	rec := httptest.NewRecorder()
-	NewHandler(slog.New(slog.DiscardHandler), store).
+	NewHandler(slog.New(slog.DiscardHandler), store, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/readiness", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -97,7 +97,7 @@ func TestReadiness_BoundsTheCheck(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	NewHandler(slog.New(slog.DiscardHandler), store).
+	NewHandler(slog.New(slog.DiscardHandler), store, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/readiness", nil))
 
 	deadline := <-deadlines

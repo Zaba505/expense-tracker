@@ -41,6 +41,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"strconv"
 
@@ -232,7 +234,9 @@ func firestoreEmulator(port int) *dagger.Service {
 //
 //	dagger call emulator --seed up --ports 8085:8085
 //	FIRESTORE_EMULATOR_HOST=localhost:8085 GCP_PROJECT=demo-expense-tracker \
-//	  OWNER_EMAIL=you@example.com go run ./cmd/server
+//	  OWNER_EMAIL=you@example.com \
+//	  OAUTH_CLIENT_ID=local.apps.googleusercontent.com OAUTH_CLIENT_SECRET=x \
+//	  SESSION_KEY="$(openssl rand -base64 32)" go run ./cmd/server
 //
 // For the whole app, dependencies and all, use `run-against local`.
 //
@@ -378,6 +382,20 @@ func (r *RunAgainst) Local(
 	// +optional
 	// +default=true
 	seed bool,
+	// Google Sign-In credentials. The defaults are placeholders — enough
+	// for the app to boot and serve, which is all a run against a fake
+	// database needs. To actually sign in locally, pass a real client and
+	// register http://localhost:8080/auth/callback as one of its
+	// authorized redirect URIs:
+	//
+	//	dagger call run-against local --oauth-client-id=… \
+	//	  --oauth-client-secret=env:OAUTH_CLIENT_SECRET up --ports 8080:8080
+	//
+	// +optional
+	// +default="local-client-id.apps.googleusercontent.com"
+	oauthClientID string,
+	// +optional
+	oauthClientSecret *dagger.Secret,
 ) (*dagger.Service, error) {
 	emulator := firestoreEmulator(DefaultEmulatorPort)
 
@@ -397,12 +415,38 @@ func (r *RunAgainst) Local(
 		WithEnvVariable("FIRESTORE_EMULATOR_HOST", emulatorHost(DefaultEmulatorPort)).
 		WithEnvVariable("GCP_PROJECT", project).
 		WithEnvVariable("OWNER_EMAIL", ownerEmail).
+		WithEnvVariable("OAUTH_CLIENT_ID", oauthClientID).
+		// The session key is generated per run, so a restart signs everybody
+		// out — which is the right default locally: it makes the sign-in flow
+		// the thing being exercised, rather than a cookie left over from an
+		// earlier run.
+		WithEnvVariable("SESSION_KEY", localSessionKey()).
 		WithEnvVariable("PORT", strconv.Itoa(port)).
 		WithExposedPort(port)
+
+	// A Secret when the caller has one, so a real client secret is mounted
+	// for the exec and never written into an image layer. Without one, a
+	// placeholder: the app will not boot without the variable, and a local
+	// run against a fake database has no sign-in to complete anyway.
+	if oauthClientSecret != nil {
+		app = app.WithSecretVariable("OAUTH_CLIENT_SECRET", oauthClientSecret)
+	} else {
+		app = app.WithEnvVariable("OAUTH_CLIENT_SECRET", "local-client-secret")
+	}
 
 	// UseEntrypoint: the scratch image is the binary and nothing else —
 	// no shell, no default command to fall back on.
 	return app.AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true}), nil
+}
+
+// localSessionKey is a fresh 32-byte signing key, base64 as SESSION_KEY is
+// read. Random rather than a constant on purpose: a signing key committed to
+// a repository is a signing key that ends up in a deployment, and the one
+// thing that stops that is there not being one to copy.
+func localSessionKey() string {
+	var key [32]byte
+	rand.Read(key[:])
+	return base64.StdEncoding.EncodeToString(key[:])
 }
 
 // emulatorHost is the address a bound emulator answers on, from inside

@@ -1,15 +1,29 @@
 package view
 
+import "github.com/Zaba505/expense-tracker/internal/auth"
+
 // Home is the landing page. It is a placeholder: it proves the server,
 // the layout, and the embedded assets are wired together end to end.
 // The month view that replaces it arrives with the entry stories.
-templ Home() {
+//
+// signedInAs is the email of the account signed in, or empty when nobody
+// is. The page renders either way and protects nothing — the middleware
+// that turns a session into access is #14 — so this shows the session
+// rather than enforcing it.
+templ Home(signedInAs string) {
 	@Layout("expense-tracker") {
 		<section class="card">
 			<h1>expense-tracker</h1>
 			<p class="muted">
 				The server is up. Expenses, rollups, and the yearly grid land here.
 			</p>
+			if signedInAs != "" {
+				<p class="muted">Signed in as <strong>{ signedInAs }</strong>.</p>
+			} else {
+				<p>
+					<a class="button" href={ templ.SafeURL(auth.LoginPath) }>Sign in with Google</a>
+				</p>
+			}
 		</section>
 	}
 }

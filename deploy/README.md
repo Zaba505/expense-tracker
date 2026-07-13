@@ -10,6 +10,7 @@ directory, and takes credentials as an explicit short-lived token:
 ```sh
 dagger call terraform validate                       # no cloud, no credentials — this is the CI gate
 dagger call terraform --project=<id> --owner-email=<you@example.com> \
+  --oauth-client-id=<...apps.googleusercontent.com> \
   --access-token=cmd://"gcloud auth print-access-token" plan
 ```
 
@@ -25,7 +26,7 @@ The rationale, the argument list, and the caching sharp edge are in
 | Cloud Run service, min-instances 0                  | `run.tf`       | probes wired to `/health/readiness` and `/health/liveness`                |
 | Runtime service account + `roles/datastore.user`    | `iam.tf`       | what the app runs as; it can touch the log and nothing else               |
 | Deployer service account + Workload Identity pool   | `iam.tf`, `wif.tf` | what GitHub Actions impersonates — no key, no repo secret            |
-| Secret Manager secret for the Sign-In client secret | `secrets.tf`   | the container only; the *value* is added out of band (see below)          |
+| Two Secret Manager secrets: Sign-In client secret, session key | `secrets.tf` | the containers only; the *values* are added out of band (see below) |
 | The APIs all of the above need                      | `services.tf`  | everything `depends_on` this                                              |
 
 Three of those decisions are load-bearing and easy to undo by accident, so
@@ -46,11 +47,25 @@ gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleap
 Terraform enables the rest itself, but it cannot enable the API it needs in
 order to enable APIs.
 
+You also need a **Google Sign-In client**, created by hand in the Cloud
+console (APIs & Services → Credentials → OAuth client ID → Web application).
+It is not in this module on purpose: an OAuth client is tied to a consent
+screen, a brand, and a support email, none of which are infrastructure. Its
+**authorized redirect URI** is the service's own URL plus `/auth/callback` —
+which you only know after the first apply and deploy, so create the client
+now, and come back and add the URI once the service has a URL. Google
+redirects nowhere it was not told about.
+
+Keep two things from it: the client **id**, which is a `--oauth-client-id`
+argument below, and the client **secret**, which goes to Secret Manager and
+never appears on a command line.
+
 Then, from the repo root — `plan` and `apply` take the same arguments, so
 export them once:
 
 ```sh
 export TF_ARGS="--project=<id> --owner-email=<you@example.com> \
+  --oauth-client-id=<...apps.googleusercontent.com> \
   --access-token=cmd://\"gcloud auth print-access-token\""
 
 dagger call terraform $TF_ARGS state-bucket   # once per project; idempotent
@@ -119,23 +134,43 @@ that is Terraform's, and the deploy refuses to run if the service does not
 exist yet, rather than creating one that has none of the identity, env,
 probes or scaling this module gives it.
 
-Two things are deliberately left for the stories that need them:
+### Give the two secrets their values — before you deploy
 
-- **The service is private.** `allow_unauthenticated` is `false`, because the
-  app does not yet check who is calling — a public URL would be an
-  unauthenticated handle on the event log. Reach it in the meantime with
-  `gcloud run services proxy expense-tracker --region <region>`; the owner
-  holds `roles/run.invoker`. The auth story (#13/#14) flips the variable,
-  since a browser cannot complete an in-app Sign-In flow against a service
-  that rejects it at the edge.
-- **The Sign-In client secret has no value.** Terraform creates the secret and
-  grants the runtime account read access, but never sees the secret itself —
-  a value passed through a variable would sit in plaintext in the state file.
-  Add it once, out of band:
+**This is a prerequisite, not a nicety.** Terraform creates the two secret
+*containers* and grants the runtime account read access, but never sees the
+values: one passed through a variable would sit in plaintext in the state
+file, which is the whole thing Secret Manager exists to avoid. The Cloud Run
+service references both (`run.tf`), and **a container that mounts a secret
+with no versions does not start** — so a deploy before this step fails, and it
+fails in a way that reads as a broken image rather than an empty secret.
 
-  ```sh
-  gcloud secrets versions add expense-tracker-oauth-client-secret --project=<id> --data-file=-
-  ```
+```sh
+# The Sign-In client secret, from the OAuth client you created above.
+gcloud secrets versions add expense-tracker-oauth-client-secret \
+  --project=<id> --data-file=-
+
+# The key that signs session cookies. 32 bytes of randomness — it has no
+# counterpart anywhere, so it is generated, not looked up.
+openssl rand -base64 32 | gcloud secrets versions add expense-tracker-session-key \
+  --project=<id> --data-file=-
+```
+
+Rotating either one is the same command again plus a new revision: the
+service reads `latest`, not a pinned version. Rotating the session key signs
+everybody out, which — for an app with no session store — is what revoking
+every session *is*.
+
+One thing is still deliberately left for the story that needs it:
+
+- **The service is private.** `allow_unauthenticated` is `false`. The app now
+  authenticates its callers (#13), but authenticating is not authorizing:
+  nothing yet requires a session or checks it against the owner, so a public
+  URL would still be an open handle on the event log. Reach it in the
+  meantime with `gcloud run services proxy expense-tracker --region <region>`;
+  the owner holds `roles/run.invoker`. The variable flips in #14, which lands
+  the allowlist and the middleware — and it has to flip then, because a
+  browser cannot complete an in-app Sign-In flow against a service that
+  rejects it at the edge.
 
 ## What CI checks
 

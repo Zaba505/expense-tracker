@@ -77,3 +77,13 @@ body {
 a {
   color: var(--accent);
 }
+
+.button {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  background: var(--accent);
+  border-radius: var(--radius);
+  color: var(--surface);
+  font-weight: 600;
+  text-decoration: none;
+}

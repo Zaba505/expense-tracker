@@ -77,6 +77,13 @@ type Terraform struct {
 	// the one principal that may invoke it.
 	OwnerEmail string
 
+	// OAuthClientID is the Google Sign-In client the app signs people in
+	// with. Required by `plan` and `apply` for the same reason OwnerEmail is:
+	// it goes into the service's environment, and the app refuses to boot
+	// without it. The matching secret never passes through here — it is added
+	// to Secret Manager out of band.
+	OAuthClientID string
+
 	// Bucket holds the remote state. Empty means "<project>-tfstate". It is
 	// not called StateBucket because the function that creates it is, and a
 	// Dagger object cannot expose a field and a method under one name.
@@ -114,6 +121,11 @@ func (m *ExpenseTracker) Terraform(
 	//
 	// +optional
 	ownerEmail string,
+	// The Google Sign-In client id ("....apps.googleusercontent.com").
+	// Required by `plan` and `apply`.
+	//
+	// +optional
+	oauthClientID string,
 	// GCS bucket for the remote state. Defaults to "<project>-tfstate".
 	//
 	// +optional
@@ -135,6 +147,7 @@ func (m *ExpenseTracker) Terraform(
 		Project:              project,
 		Region:               region,
 		OwnerEmail:           ownerEmail,
+		OAuthClientID:        oauthClientID,
 		Bucket:               stateBucket,
 		AllowUnauthenticated: allowUnauthenticated,
 		AccessToken:          accessToken,
@@ -284,6 +297,9 @@ func (t *Terraform) init() (*dagger.Container, error) {
 	if t.OwnerEmail == "" {
 		return nil, fmt.Errorf("--owner-email is required: it is the app's allowlist and, until the service goes public, the only principal allowed to invoke it")
 	}
+	if t.OAuthClientID == "" {
+		return nil, fmt.Errorf("--oauth-client-id is required: the service's environment names it, and the app refuses to boot without a Sign-In client to authenticate people with")
+	}
 
 	return t.base().
 		// Read by both the google provider and the gcs backend. A Secret, so
@@ -293,6 +309,7 @@ func (t *Terraform) init() (*dagger.Container, error) {
 		WithEnvVariable("TF_VAR_project_id", t.Project).
 		WithEnvVariable("TF_VAR_region", t.Region).
 		WithEnvVariable("TF_VAR_owner_email", t.OwnerEmail).
+		WithEnvVariable("TF_VAR_oauth_client_id", t.OAuthClientID).
 		WithEnvVariable("TF_VAR_allow_unauthenticated", strconv.FormatBool(t.AllowUnauthenticated)).
 		// The bucket cannot live in the backend block — it does not exist when
 		// the config is written, and the config does not know the project. See

@@ -60,6 +60,52 @@ resource "google_cloud_run_v2_service" "app" {
         value = var.owner_email
       }
 
+      # The Sign-In client id is not a secret — it travels in every
+      # authorization URL the browser is redirected to, so hiding it in
+      # Secret Manager would be ceremony, not security.
+      env {
+        name  = "OAUTH_CLIENT_ID"
+        value = var.oauth_client_id
+      }
+
+      # These two are. Cloud Run resolves them as the runtime account at
+      # instance start, so the value never passes through Terraform, this
+      # repo, or a shell history.
+      #
+      # "latest" rather than a pinned version, deliberately: rotating either
+      # secret should be `gcloud secrets versions add` and a new revision,
+      # not that plus an edit here. The cost is that a bad version is live
+      # the moment it is added — acceptable for a two-secret, one-user app,
+      # and the fix is the same command again.
+      #
+      # A revision cannot start if either secret has no version. That is not
+      # a flaw to work around; it is the app refusing to run without the
+      # things it needs to authenticate anyone.
+      env {
+        name = "OAUTH_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.oauth_client_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "SESSION_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.session_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      # No BASE_URL: unset, the app builds its OAuth redirect URI from the
+      # request it is serving, which on Cloud Run is its own URL. Naming it
+      # here would be a chicken-and-egg problem anyway — the URL is an
+      # output of creating this service.
+
       # No FIRESTORE_EMULATOR_HOST here, which is the entire difference
       # between this and the local run configuration: unset, the app
       # authenticates to native Firestore with the runtime account's ADC.
@@ -135,6 +181,12 @@ resource "google_cloud_run_v2_service" "app" {
   depends_on = [
     google_project_service.this,
     google_project_iam_member.runtime_datastore,
+
+    # The grants, not just the secrets: Cloud Run reads both secrets as the
+    # runtime account while creating the revision, so a service created
+    # before the bindings exist fails to start and takes the apply with it.
+    google_secret_manager_secret_iam_member.runtime_accessor,
+    google_secret_manager_secret_iam_member.runtime_session_key_accessor,
   ]
 }
 
