@@ -171,8 +171,11 @@ func (a *Authenticator) setSession(w http.ResponseWriter, r *http.Request, s Ses
 		Value: value,
 		Path:  "/",
 		// The browser is told the same expiry the payload carries, so a
-		// cookie that can no longer be used also stops being sent.
-		MaxAge: int(time.Until(s.ExpiresAt).Seconds()),
+		// cookie that can no longer be used also stops being sent. Measured
+		// against a.now() rather than time.Now(): the payload's expiry was
+		// set by that clock, and two clocks would put a Max-Age on the
+		// cookie that disagrees with the expiry inside it.
+		MaxAge: int(s.ExpiresAt.Sub(a.now()).Seconds()),
 	}))
 	return nil
 }

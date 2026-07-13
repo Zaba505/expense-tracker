@@ -22,7 +22,7 @@ func NewHandler(logger *slog.Logger, store Checker, authn *auth.Authenticator) h
 
 	// "/{$}" matches only the root path; a bare "/" would make the home
 	// page a catch-all and swallow every 404.
-	mux.Handle("GET /{$}", handleHome(authn))
+	mux.Handle("GET /{$}", handleHome(logger, authn))
 
 	// The sign-in flow: /auth/login sends the browser to Google,
 	// /auth/callback is the URI Google is registered to send it back to.
@@ -48,12 +48,22 @@ func NewHandler(logger *slog.Logger, store Checker, authn *auth.Authenticator) h
 // public — this is not an access check, and there is nothing here yet to
 // protect — but rendering the signed-in email is what makes a session
 // something you can see rather than something you have to take on faith.
-func handleHome(authn *auth.Authenticator) http.HandlerFunc {
+func handleHome(logger *slog.Logger, authn *auth.Authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var email string
 		if session, ok := authn.Session(r); ok {
 			email = session.Email
 		}
-		_ = view.Home(email).Render(r.Context(), w)
+
+		// Logged, not answered with a 500: templ streams straight to the
+		// ResponseWriter, so by the time a render can fail the status line
+		// and part of the page are already on their way to the browser, and
+		// http.Error would only append its text to a half-written document.
+		// A truncated page the log explains beats a lie about it being whole.
+		if err := view.Home(email).Render(r.Context(), w); err != nil {
+			logger.ErrorContext(r.Context(), "rendering the home page",
+				slog.Any("error", err),
+			)
+		}
 	}
 }

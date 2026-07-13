@@ -445,7 +445,10 @@ func (r *RunAgainst) Local(
 // thing that stops that is there not being one to copy.
 func localSessionKey() string {
 	var key [32]byte
-	rand.Read(key[:])
+	// No error to check: as of Go 1.24 crypto/rand.Read is documented never
+	// to fail — it panics rather than return a short read, so there is no
+	// path where this returns a key of zeroes.
+	_, _ = rand.Read(key[:])
 	return base64.StdEncoding.EncodeToString(key[:])
 }
 

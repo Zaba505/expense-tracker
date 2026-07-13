@@ -192,6 +192,38 @@ func TestSetSession_CookieAttributes(t *testing.T) {
 	}
 }
 
+// TestSetSession_MaxAgeAgreesWithTheExpiry: the cookie's Max-Age and the
+// expiry sealed inside it are two statements about the same moment, and
+// they have to be made by the same clock. Measuring one with time.Now()
+// and the other with the Authenticator's clock puts a browser-side
+// lifetime on the cookie that disagrees with the server-side one — the
+// cookie stops being sent early, or lingers after it stops verifying.
+func TestSetSession_MaxAgeAgreesWithTheExpiry(t *testing.T) {
+	t.Parallel()
+
+	a := newFakeGoogle(t).authenticator(t, nil)
+
+	// A clock that is not the wall clock, which is the only way to tell the
+	// two apart.
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+
+	rec := httptest.NewRecorder()
+	err := a.setSession(rec, httptest.NewRequest(http.MethodGet, "/", nil), Session{
+		Email:     "owner@example.com",
+		ExpiresAt: a.now().Add(SessionTTL),
+	})
+	if err != nil {
+		t.Fatalf("setSession() error = %v", err)
+	}
+
+	cookie := findCookie(t, rec.Result().Cookies(), sessionCookie)
+	if want := int(SessionTTL.Seconds()); cookie.MaxAge != want {
+		t.Errorf("session cookie Max-Age = %ds, want %ds — measured against a different clock than the expiry it seals",
+			cookie.MaxAge, want)
+	}
+}
+
 // TestNew_RejectsAWeakKey: HMAC-SHA256 is worth exactly what its key is
 // worth, and a passphrase somebody typed is not worth 256 bits. The app
 // refuses to start rather than sign sessions with one — which is the same
