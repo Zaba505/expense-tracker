@@ -22,6 +22,7 @@ import (
 	// which is what makes the scratch image viable.
 	_ "golang.org/x/crypto/x509roots/fallback"
 
+	"github.com/Zaba505/expense-tracker/internal/auth"
 	"github.com/Zaba505/expense-tracker/internal/config"
 	"github.com/Zaba505/expense-tracker/internal/eventlog"
 	"github.com/Zaba505/expense-tracker/internal/web"
@@ -68,6 +69,20 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}
 	}()
 
+	// Like the event store, this reaches no network: Google's signing keys
+	// are fetched at the first sign-in, not at boot, so accounts.google.com
+	// having a bad minute cannot stop a revision from rolling out.
+	authn, err := auth.New(ctx, auth.Config{
+		ClientID:     cfg.OAuthClientID,
+		ClientSecret: cfg.OAuthClientSecret,
+		SessionKey:   cfg.SessionKey,
+		BaseURL:      cfg.BaseURL,
+		Logger:       logger,
+	})
+	if err != nil {
+		return err
+	}
+
 	// Listen before announcing: a port already in use should fail here,
 	// not look like a healthy start followed by silence.
 	lis, err := net.Listen("tcp", cfg.Addr())
@@ -81,5 +96,5 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		slog.Bool("firestore_emulator", cfg.UsesEmulator()),
 	)
 
-	return web.Serve(ctx, lis, web.NewHandler(logger, store), logger)
+	return web.Serve(ctx, lis, web.NewHandler(logger, store, authn), logger)
 }

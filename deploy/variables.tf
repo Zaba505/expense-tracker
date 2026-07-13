@@ -34,6 +34,29 @@ variable "owner_email" {
   }
 }
 
+variable "oauth_client_id" {
+  description = <<-EOT
+    The Google Sign-In (OAuth 2.0) client id the app authenticates people
+    with. Create the client by hand in the Cloud console — an OAuth client is
+    tied to a consent screen, a brand, and a support email, none of which are
+    infrastructure — and pass its id here. Its secret goes to Secret Manager,
+    out of band; this is the half that is public.
+
+    Required, and deliberately without a default: the app refuses to boot
+    without it (see internal/config), so a plan that quietly supplied an empty
+    string would trade a loud failure here for a revision that will not start.
+
+    The client's authorized redirect URI must be the service's own URL plus
+    /auth/callback — Google will not redirect anywhere it was not told about.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("\\.apps\\.googleusercontent\\.com$", var.oauth_client_id))
+    error_message = "oauth_client_id must be a Google OAuth client id, ending in .apps.googleusercontent.com."
+  }
+}
+
 variable "service_name" {
   description = "Cloud Run service name; also the prefix for the service accounts and the secret."
   type        = string

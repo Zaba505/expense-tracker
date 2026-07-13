@@ -32,11 +32,22 @@ const (
 	// entirely — and that app answers nothing in production.
 	smokePort = 9090
 
-	// The app requires both of these to boot. Against an emulator the
+	// The app requires all of these to boot. Against an emulator the
 	// project id only namespaces the data, and nothing enforces the owner
 	// until the auth stories land.
 	smokeProject    = "smoke-expense-tracker"
 	smokeOwnerEmail = "owner@example.com"
+
+	// Google Sign-In credentials the app will never get to use: no browser
+	// completes a flow here, and the app makes no network call with them
+	// until one does. They are here because the app refuses to boot without
+	// them, which is itself worth smoke-testing — a scratch image that dies
+	// on a missing variable dies the same way in production.
+	smokeClientID     = "smoke-client-id.apps.googleusercontent.com"
+	smokeClientSecret = "smoke-client-secret"
+
+	// 32 bytes of "k", base64 — a real key shape, not a real key.
+	smokeSessionKey = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
 
 	// smokeBoot bounds the wait for the container to answer at all. It is a
 	// static Go binary, so it starts in milliseconds — this is slack for the
@@ -88,6 +99,15 @@ var smokeChecks = []smokeCheck{
 		path: "/", status: http.StatusOK, body: "<!doctype html>",
 		proves: "the templ-rendered home page is served",
 	},
+	{
+		path: "/auth/login", status: http.StatusFound, body: "accounts.google.com",
+		// A 302 at Google means the app read OAUTH_CLIENT_ID and SESSION_KEY
+		// out of its environment and built an authorization URL from them.
+		// The container would not have started at all if they were missing,
+		// so this is the other half: that they are wired to the flow and not
+		// merely present.
+		proves: "the sign-in flow is mounted and points at Google",
+	},
 }
 
 // ImageSmokeTest starts the scratch image that `server-image` builds — the
@@ -116,6 +136,9 @@ func (m *ExpenseTracker) ImageSmokeTest(
 		WithEnvVariable("FIRESTORE_EMULATOR_HOST", emulatorHost(DefaultEmulatorPort)).
 		WithEnvVariable("GCP_PROJECT", smokeProject).
 		WithEnvVariable("OWNER_EMAIL", smokeOwnerEmail).
+		WithEnvVariable("OAUTH_CLIENT_ID", smokeClientID).
+		WithEnvVariable("OAUTH_CLIENT_SECRET", smokeClientSecret).
+		WithEnvVariable("SESSION_KEY", smokeSessionKey).
 		WithEnvVariable("PORT", strconv.Itoa(smokePort)).
 		WithExposedPort(smokePort).
 		AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true})
@@ -142,7 +165,16 @@ func (m *ExpenseTracker) ImageSmokeTest(
 	// The app's own timeouts are the ones under test; this only has to be
 	// longer than all of them, so a slow answer reads as slow and not as
 	// dead. Readiness is the longest, bounded by web.ReadinessTimeout.
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		// The redirect is the answer, not a step on the way to one: /auth/login
+		// is checked *because* it 302s at Google, and a client that followed it
+		// would report on accounts.google.com's health instead of the image's —
+		// over a network the smoke test has no business needing.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	if err := waitForBoot(ctx, client, endpoint); err != nil {
 		return "", err

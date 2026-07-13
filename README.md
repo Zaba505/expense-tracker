@@ -22,6 +22,7 @@ internal/
   domain/        Event and the event-sourcing vocabulary
   eventlog/      Firestore-backed append-only event store
   projection/    Fold(events) -> state, rollups, known-types, yearly grid
+  auth/          Google Sign-In (OIDC) and the signed-cookie session
   web/           net/http ServeMux, handlers, auth middleware, the server
   view/          templ components + the assets' URL space
 static/          vendored htmx + CSS (embedded via go:embed)
@@ -41,8 +42,45 @@ every problem at once:
 | ------------------------- | -------- | ------- | -------------------------------------------------- |
 | `GCP_PROJECT`             | yes      | —       | Google Cloud project that owns Firestore           |
 | `OWNER_EMAIL`             | yes      | —       | the single account allowed to use the app          |
+| `OAUTH_CLIENT_ID`         | yes      | —       | Google Sign-In client (public half)                |
+| `OAUTH_CLIENT_SECRET`     | yes      | —       | Google Sign-In client secret (Secret Manager)      |
+| `SESSION_KEY`             | yes      | —       | base64 key that signs session cookies (Secret Manager) |
 | `PORT`                    | no       | `8080`  | HTTP listen port (Cloud Run injects this)          |
 | `FIRESTORE_EMULATOR_HOST` | no       | —       | when set, use a local Firestore emulator           |
+| `BASE_URL`                | no       | —       | pins the public origin the OAuth redirect URI is built from |
+
+The three auth variables are **required**, so a deployment that could not
+complete a sign-in refuses to start rather than serving a login page that
+cannot work. Generate a session key with `openssl rand -base64 32`.
+
+## Sign-in
+
+`internal/auth` signs the owner in with Google over ordinary OIDC:
+`GET /auth/login` mints a state and a nonce and redirects to Google;
+`GET /auth/callback` checks the state, redeems the code, verifies the ID
+token's signature, issuer, audience and nonce, and sets a session cookie.
+
+The session **is** the cookie — there is no session store. That fits the
+deployment rather than saving a table: the app scales to zero across
+interchangeable Cloud Run instances, so a session held in one instance's
+memory would be gone on the next cold start and unknown to the other
+instance. A cookie signed with `SESSION_KEY` is verifiable by any instance,
+including one that has not started yet. The price is that a session cannot
+be revoked server-side, which is why it expires in a day and why the key is
+a secret: **anyone holding `SESSION_KEY` can mint a cookie claiming to be
+the owner.** Rotating it (a new Secret Manager version) invalidates every
+session, which is the same thing as revoking them all.
+
+`BASE_URL` is normally unset: the redirect URI is built from the request the
+app is serving, which makes the same binary work on `http://localhost:8080`
+and on a Cloud Run URL that did not exist when the config was written — the
+URL is an *output* of creating the service. Set it only behind a custom
+domain whose host is not the one reaching the container.
+
+Authenticating is not authorizing: this hands a session to any Google
+account with a verified email, because no route requires one yet. The owner
+allowlist, the middleware that enforces it, and logout are
+[#14](https://github.com/Zaba505/expense-tracker/issues/14).
 
 ## Event log
 
@@ -296,6 +334,7 @@ GitHub Actions deploy without a service-account key.
 dagger call terraform validate               # fmt + validate; no cloud, no credentials
 
 export TF_ARGS="--project=<id> --owner-email=<you@example.com> \
+  --oauth-client-id=<...apps.googleusercontent.com> \
   --access-token=cmd://\"gcloud auth print-access-token\""
 
 dagger call terraform $TF_ARGS state-bucket  # once per project; idempotent
@@ -319,11 +358,15 @@ lives in cannot be a resource in the module that stores state there. It is
 the one bootstrap step, and it is a command rather than a paragraph you
 follow by hand.
 
-`deploy/README.md` covers standing up an environment end to end. The two
-things worth knowing from here: the service is created **private** and stays
-that way until the app authenticates its own callers (#13), and Terraform
-owns the Cloud Run service but **not its image** — `gcloud run deploy` does,
-so an apply never rolls the running build back.
+`deploy/README.md` covers standing up an environment end to end. Three things
+worth knowing from here: the service is still created **private** — the app
+now signs people in (#13), but nothing yet stops one from being anybody, so
+the edge stays shut until the middleware lands (#14); Terraform owns the
+Cloud Run service but **not its image** — `gcloud run deploy` does, so an
+apply never rolls the running build back; and the service now reads two
+secrets out of Secret Manager, so **a revision will not start until both have
+a version**. Adding them is a one-time, out-of-band step, and `deploy/README.md`
+spells it out.
 
 ### Run locally — `run-against local`
 
@@ -357,11 +400,20 @@ dagger call emulator --seed up --ports 8085:8085     # one shell
 export GCP_PROJECT=demo-expense-tracker              # another
 export OWNER_EMAIL=you@example.com
 export FIRESTORE_EMULATOR_HOST=localhost:8085
+export OAUTH_CLIENT_ID=local.apps.googleusercontent.com
+export OAUTH_CLIENT_SECRET=x
+export SESSION_KEY="$(openssl rand -base64 32)"
 go run ./cmd/server
 ```
 
 `FIRESTORE_EMULATOR_HOST` is the only difference between that and
-production.
+production. The OAuth values above are placeholders — enough for the app to
+boot and serve, which is all a run against a fake database needs. To actually
+sign in locally, pass a **real** client and register
+`http://localhost:8080/auth/callback` as one of its authorized redirect URIs;
+Google will not redirect to a URI it was not told about. The same goes for
+`run-against local`, which takes `--oauth-client-id` and
+`--oauth-client-secret` for exactly that.
 
 ### Regenerate templ
 

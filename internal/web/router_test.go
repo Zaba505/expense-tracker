@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Zaba505/expense-tracker/internal/auth"
 )
 
 // stubChecker stands in for the event store: the routing tests care that
@@ -26,7 +29,23 @@ func (s *stubChecker) Check(context.Context) error {
 // testHandler is the real routing table, with logs thrown away and a
 // dependency that is always healthy.
 func testHandler() http.Handler {
-	return NewHandler(slog.New(slog.DiscardHandler), &stubChecker{})
+	return NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testAuthenticator())
+}
+
+// testAuthenticator is a real Authenticator with a throwaway signing key
+// and no issuer behind it. These tests never complete a sign-in — that is
+// the auth package's own test, which stands up a fake Google — so all they
+// need is the real thing mounted on the real routes.
+func testAuthenticator() *auth.Authenticator {
+	authn, err := auth.New(context.Background(), auth.Config{
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+		SessionKey:   bytes.Repeat([]byte("k"), auth.MinSessionKeyLen),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return authn
 }
 
 // get runs a request against the real handler in-process, no listener.
@@ -67,7 +86,7 @@ func TestLiveness_IgnoresDependencies(t *testing.T) {
 
 	store := &stubChecker{err: errors.New("firestore is down")}
 	rec := httptest.NewRecorder()
-	NewHandler(slog.New(slog.DiscardHandler), store).
+	NewHandler(slog.New(slog.DiscardHandler), store, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/liveness", nil))
 
 	if rec.Code != http.StatusOK {
@@ -103,6 +122,39 @@ func TestHome(t *testing.T) {
 	}
 	if got := rec.Body.String(); !strings.Contains(got, "<!doctype html>") {
 		t.Errorf("GET / body is not an HTML document:\n%s", got)
+	}
+}
+
+// TestHome_OffersSignIn is the drift test between the home page and the
+// login route: the page's only way in is this link, and a link pointing
+// somewhere the router does not serve is a sign-in button that 404s.
+func TestHome_OffersSignIn(t *testing.T) {
+	t.Parallel()
+
+	home := get(t, "/").Body.String()
+
+	if !strings.Contains(home, `href="`+auth.LoginPath+`"`) {
+		t.Fatalf("home page offers no link to %s:\n%s", auth.LoginPath, home)
+	}
+	if code := get(t, auth.LoginPath).Code; code != http.StatusFound {
+		t.Errorf("GET %s = %d, want %d — the page's sign-in link goes nowhere",
+			auth.LoginPath, code, http.StatusFound)
+	}
+}
+
+// TestAuthRoutesAreMounted pins both halves of the flow onto the routing
+// table. The callback is checked with an empty query, which it must
+// refuse: there is no login in progress, and a callback that answers
+// anything but an error to that would be one that skipped its state check.
+func TestAuthRoutesAreMounted(t *testing.T) {
+	t.Parallel()
+
+	if code := get(t, auth.LoginPath).Code; code != http.StatusFound {
+		t.Errorf("GET %s = %d, want %d (a redirect to Google)", auth.LoginPath, code, http.StatusFound)
+	}
+	if code := get(t, auth.CallbackPath).Code; code != http.StatusBadRequest {
+		t.Errorf("GET %s with no login in progress = %d, want %d",
+			auth.CallbackPath, code, http.StatusBadRequest)
 	}
 }
 

@@ -5,7 +5,9 @@ go 1.26.2
 require (
 	cloud.google.com/go/firestore v1.23.0
 	github.com/a-h/templ v0.3.1020
+	github.com/coreos/go-oidc/v3 v3.20.0
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20260709184058-243e02a382f8
+	golang.org/x/oauth2 v0.36.0
 	google.golang.org/api v0.288.0
 	google.golang.org/grpc v1.82.0
 )
@@ -24,6 +26,7 @@ require (
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
@@ -41,7 +44,6 @@ require (
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
