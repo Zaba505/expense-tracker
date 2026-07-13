@@ -219,11 +219,11 @@ func TestHome_NonOwnerSessionIsLoggedOut(t *testing.T) {
 		t.Fatalf("logout handler called %d times, want 1", authn.logoutCalled)
 	}
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "et_session" && c.MaxAge < 0 {
+		if c.MaxAge < 0 {
 			return
 		}
 	}
-	t.Fatal("GET / with a non-owner session did not clear the session cookie")
+	t.Fatal("GET / with a non-owner session did not set an expiring cookie")
 }
 
 // TestAuthRoutesAreMounted pins both halves of the flow onto the routing

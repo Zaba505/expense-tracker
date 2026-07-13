@@ -3,7 +3,6 @@ package web
 import (
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/Zaba505/expense-tracker/internal/auth"
 )
@@ -27,7 +26,7 @@ func requireOwner(logger *slog.Logger, ownerEmail string, authn authenticator, n
 		}
 
 		session, ok := authn.Session(r)
-		if ok && strings.EqualFold(session.Email, ownerEmail) {
+		if ok && session.Email == ownerEmail {
 			next.ServeHTTP(w, r)
 			return
 		}
