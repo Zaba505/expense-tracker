@@ -158,7 +158,7 @@ func (e Event) Validate() error {
 	if e.Type == "" {
 		return fmt.Errorf("%w: type is empty", ErrInvalidEvent)
 	}
-	if !e.Direction.valid() {
+	if !e.Direction.Valid() {
 		return fmt.Errorf("%w: direction %q is not one of %q, %q", ErrInvalidEvent, e.Direction, DirectionExpense, DirectionIncome)
 	}
 	if e.RecordedAt.IsZero() {
@@ -180,9 +180,14 @@ func (a Action) valid() bool {
 	}
 }
 
-// valid reports whether the direction is one the rollups know. It is
-// called after Normalize, so the empty direction is already an expense.
-func (d Direction) valid() bool {
+// Valid reports whether the direction is one the rollups know how to count.
+// It expects a normalized direction, so the empty one is already an expense.
+//
+// It is exported because the fold needs the same answer Validate does, and a
+// second copy of this switch living in the projection is a copy that can be
+// forgotten when a direction is added — leaving a direction the log accepts
+// and the totals quietly drop.
+func (d Direction) Valid() bool {
 	switch d {
 	case DirectionExpense, DirectionIncome:
 		return true
