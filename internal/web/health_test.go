@@ -30,10 +30,10 @@ func TestReadiness_Healthy(t *testing.T) {
 	store := &stubChecker{}
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/readiness", nil))
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, readinessPath, nil))
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("GET /health/readiness status = %d, want %d", rec.Code, http.StatusOK)
+		t.Errorf("GET %s status = %d, want %d", readinessPath, rec.Code, http.StatusOK)
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", got)
@@ -61,10 +61,10 @@ func TestReadiness_Unreachable(t *testing.T) {
 	store := &stubChecker{err: errors.New("dial firestore: connection refused")}
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/readiness", nil))
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, readinessPath, nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("GET /health/readiness status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		t.Errorf("GET %s status = %d, want %d", readinessPath, rec.Code, http.StatusServiceUnavailable)
 	}
 
 	body := readinessResponse(t, rec)
@@ -98,7 +98,7 @@ func TestReadiness_BoundsTheCheck(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/readiness", nil))
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, readinessPath, nil))
 
 	deadline := <-deadlines
 	if until := time.Until(deadline); until <= 0 || until > ReadinessTimeout {

@@ -14,6 +14,7 @@ import (
 	"github.com/Zaba505/expense-tracker/internal/auth"
 )
 
+// testOwnerEmail is the configured allowlisted account in router tests.
 const testOwnerEmail = "owner@example.com"
 
 // stubChecker stands in for the event store: the routing tests care that
@@ -30,11 +31,21 @@ func (s *stubChecker) Check(context.Context) error {
 
 type stubAuth struct {
 	session      auth.Session
-	ok           bool
+	hasSession   bool
 	logoutCalled int
 }
 
-func (s *stubAuth) Session(*http.Request) (auth.Session, bool) { return s.session, s.ok }
+func (s *stubAuth) Session(*http.Request) (auth.Session, bool) { return s.session, s.hasSession }
+
+func (s *stubAuth) ClearSession(w http.ResponseWriter, r *http.Request) {
+	s.logoutCalled++
+	http.SetCookie(w, &http.Cookie{
+		Name:   "cleared",
+		Value:  "",
+		Path:   "/",
+		MaxAge: -1,
+	})
+}
 
 func (s *stubAuth) LoginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,13 +61,7 @@ func (s *stubAuth) CallbackHandler() http.Handler {
 
 func (s *stubAuth) LogoutHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.logoutCalled++
-		http.SetCookie(w, &http.Cookie{
-			Name:   "et_session",
-			Value:  "",
-			Path:   "/",
-			MaxAge: -1,
-		})
+		s.ClearSession(w, r)
 		http.Redirect(w, r, auth.LoginPath, http.StatusSeeOther)
 	})
 }
@@ -109,16 +114,16 @@ func doWithHandler(t *testing.T, h http.Handler, method, path string) *httptest.
 func TestLiveness(t *testing.T) {
 	t.Parallel()
 
-	rec := get(t, "/health/liveness")
+	rec := get(t, livenessPath)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("GET /health/liveness status = %d, want %d", rec.Code, http.StatusOK)
+		t.Errorf("GET %s status = %d, want %d", livenessPath, rec.Code, http.StatusOK)
 	}
 	if got := rec.Body.String(); got != "ok" {
-		t.Errorf("GET /health/liveness body = %q, want %q", got, "ok")
+		t.Errorf("GET %s body = %q, want %q", livenessPath, got, "ok")
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
-		t.Errorf("GET /health/liveness Content-Type = %q, want text/plain", got)
+		t.Errorf("GET %s Content-Type = %q, want text/plain", livenessPath, got)
 	}
 }
 
@@ -132,10 +137,10 @@ func TestLiveness_IgnoresDependencies(t *testing.T) {
 	store := &stubChecker{err: errors.New("firestore is down")}
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/liveness", nil))
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, livenessPath, nil))
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("GET /health/liveness with a dead dependency = %d, want %d", rec.Code, http.StatusOK)
+		t.Errorf("GET %s with a dead dependency = %d, want %d", livenessPath, rec.Code, http.StatusOK)
 	}
 	if store.called != 0 {
 		t.Errorf("liveness consulted the event store %d times, want 0", store.called)
@@ -147,23 +152,23 @@ func TestLiveness_IgnoresDependencies(t *testing.T) {
 func TestLiveness_RejectsNonGET(t *testing.T) {
 	t.Parallel()
 
-	rec := do(t, http.MethodPost, "/health/liveness")
+	rec := do(t, http.MethodPost, livenessPath)
 
 	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("POST /health/liveness status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+		t.Errorf("POST %s status = %d, want %d", livenessPath, rec.Code, http.StatusMethodNotAllowed)
 	}
 }
 
 func TestHealthz(t *testing.T) {
 	t.Parallel()
 
-	rec := get(t, "/healthz")
+	rec := get(t, healthzPath)
 
 	if rec.Code != http.StatusOK {
-		t.Errorf("GET /healthz status = %d, want %d", rec.Code, http.StatusOK)
+		t.Errorf("GET %s status = %d, want %d", healthzPath, rec.Code, http.StatusOK)
 	}
 	if got := rec.Body.String(); got != "ok" {
-		t.Errorf("GET /healthz body = %q, want %q", got, "ok")
+		t.Errorf("GET %s body = %q, want %q", healthzPath, got, "ok")
 	}
 }
 
@@ -184,8 +189,8 @@ func TestHome_OwnerSession(t *testing.T) {
 	t.Parallel()
 
 	authn := &stubAuth{
-		session: auth.Session{Email: testOwnerEmail},
-		ok:      true,
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
 	}
 	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), "/")
 
@@ -204,8 +209,8 @@ func TestHome_NonOwnerSessionIsLoggedOut(t *testing.T) {
 	t.Parallel()
 
 	authn := &stubAuth{
-		session: auth.Session{Email: "other@example.com"},
-		ok:      true,
+		session:    auth.Session{Email: "other@example.com"},
+		hasSession: true,
 	}
 	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), "/")
 
@@ -262,8 +267,8 @@ func TestUnknownPathIs404(t *testing.T) {
 	t.Parallel()
 
 	authn := &stubAuth{
-		session: auth.Session{Email: testOwnerEmail},
-		ok:      true,
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
 	}
 	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), "/no-such-page")
 
@@ -310,8 +315,8 @@ func TestHomeAssetsAreServed(t *testing.T) {
 	t.Parallel()
 
 	authn := &stubAuth{
-		session: auth.Session{Email: testOwnerEmail},
-		ok:      true,
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
 	}
 	handler := NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn)
 	home := getWithHandler(t, handler, "/").Body.String()

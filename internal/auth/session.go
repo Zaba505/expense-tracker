@@ -202,8 +202,8 @@ func (a *Authenticator) Session(r *http.Request) (Session, bool) {
 	return s, true
 }
 
-// clearSession removes the session cookie from the browser.
-func (a *Authenticator) clearSession(w http.ResponseWriter, r *http.Request) {
+// ClearSession removes the session cookie from the browser.
+func (a *Authenticator) ClearSession(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, a.cookie(r, &http.Cookie{
 		Name:   sessionCookie,
 		Value:  "",

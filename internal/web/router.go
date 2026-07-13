@@ -36,9 +36,9 @@ func NewHandler(logger *slog.Logger, store Checker, ownerEmail string, authn aut
 	// process can serve (fail it and Cloud Run just holds traffic back).
 	// Folding Firestore into liveness would turn a database blip into a
 	// restart loop.
-	mux.HandleFunc("GET /healthz", handleLiveness)
-	mux.HandleFunc("GET /health/liveness", handleLiveness)
-	mux.Handle("GET /health/readiness", handleReadiness(logger, store))
+	mux.HandleFunc("GET "+healthzPath, handleLiveness)
+	mux.HandleFunc("GET "+livenessPath, handleLiveness)
+	mux.Handle("GET "+readinessPath, handleReadiness(logger, store))
 
 	mux.Handle("GET "+view.AssetPrefix, view.AssetHandler())
 

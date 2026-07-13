@@ -9,6 +9,7 @@ import (
 
 type authenticator interface {
 	Session(*http.Request) (auth.Session, bool)
+	ClearSession(http.ResponseWriter, *http.Request)
 	LoginHandler() http.Handler
 	CallbackHandler() http.Handler
 	LogoutHandler() http.Handler
@@ -35,7 +36,8 @@ func requireOwner(logger *slog.Logger, ownerEmail string, authn authenticator, n
 			logger.WarnContext(r.Context(), "rejecting non-owner session",
 				slog.String("email", session.Email),
 			)
-			authn.LogoutHandler().ServeHTTP(w, r)
+			authn.ClearSession(w, r)
+			http.Redirect(w, r, auth.LoginPath, http.StatusSeeOther)
 			return
 		}
 
@@ -45,7 +47,7 @@ func requireOwner(logger *slog.Logger, ownerEmail string, authn authenticator, n
 
 func isPublicPath(path string) bool {
 	switch path {
-	case auth.LoginPath, auth.CallbackPath, auth.LogoutPath, "/healthz", "/health/liveness", "/health/readiness":
+	case auth.LoginPath, auth.CallbackPath, auth.LogoutPath, healthzPath, livenessPath, readinessPath:
 		return true
 	default:
 		return false

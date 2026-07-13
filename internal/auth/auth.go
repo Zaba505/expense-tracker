@@ -312,7 +312,7 @@ func (a *Authenticator) CallbackHandler() http.Handler {
 // sending it back to the start of the sign-in flow.
 func (a *Authenticator) LogoutHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a.clearSession(w, r)
+		a.ClearSession(w, r)
 		http.Redirect(w, r, LoginPath, http.StatusSeeOther)
 	})
 }
