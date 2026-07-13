@@ -411,13 +411,31 @@ func emulatorHost(port int) string {
 	return emulatorService + ":" + strconv.Itoa(port)
 }
 
+const (
+	// publishOn is the ref filter the pipeline publishes on, and it is
+	// z5labs' own default — stated here anyway, because the deploy leans on
+	// it: it is what makes `deploy` unable to roll out an image built from an
+	// unreviewed branch. A push is a side effect on a shared registry, and a
+	// filter that decides whether one happens should be visible in this
+	// repository rather than inherited silently from a dependency.
+	publishOn = "^refs/heads/main$"
+
+	// registryUsername is the literal string Artifact Registry expects when
+	// the password is an OAuth2 access token — the token is the password, and
+	// this is the user it belongs to. z5labs defaults to "ci", which is right
+	// for a registry that takes a real username and wrong for this one.
+	registryUsername = "oauth2accesstoken"
+)
+
 // goApp constructs a z5labs GoApp for one binary. Centralizing it keeps
 // every binary on one recipe: only pkg and binaryName differ.
 func goApp(source *dagger.Directory, pkg, binaryName, registry string, auth *dagger.Secret) *dagger.Z5LabsGoApp {
 	return dag.Z5Labs().GoApp(source, dagger.Z5LabsGoAppOpts{
-		Pkg:        pkg,
-		BinaryName: binaryName,
-		Registry:   registry,
-		Auth:       auth,
+		Pkg:          pkg,
+		BinaryName:   binaryName,
+		PublishOn:    publishOn,
+		Registry:     registry,
+		AuthUsername: registryUsername,
+		Auth:         auth,
 	})
 }

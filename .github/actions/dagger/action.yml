@@ -1,0 +1,54 @@
+name: Set up Dagger
+description: >-
+  Load the engine image the `engine` job cached and install the CLI pinned to
+  the same version. Every job that runs a `dagger call` needs both, and they
+  have to agree — hence one definition rather than a copy per job.
+
+inputs:
+  version:
+    description: >-
+      Engine and CLI version, without the leading "v". Must equal dagger.json's
+      engineVersion; the `engine` job is what checks that it does.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore engine image
+      id: engine-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: engine.tar.gz
+        key: dagger-engine-v${{ inputs.version }}
+
+    # The `engine` job has already pulled and cached the image, so this is
+    # normally a load from disk. The pull is the fallback for a cache that was
+    # evicted between the two jobs.
+    - name: Load engine image
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.engine-cache.outputs.cache-hit }}
+        DAGGER_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        IMAGE="registry.dagger.io/engine:v${DAGGER_VERSION}"
+        if [ "$CACHE_HIT" = "true" ]; then
+          gunzip -c engine.tar.gz | docker load
+        else
+          for i in 1 2 3; do
+            timeout 300 docker pull "$IMAGE" && break
+            echo "engine pull attempt $i failed/timed out; retrying in 5s" >&2
+            sleep 5
+          done
+          docker image inspect "$IMAGE" >/dev/null
+        fi
+
+    - name: Install Dagger CLI
+      shell: bash
+      env:
+        DAGGER_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        curl -fsSL https://dl.dagger.io/dagger/install.sh \
+          | DAGGER_VERSION="${DAGGER_VERSION}" BIN_DIR="$HOME/.local/bin" sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"

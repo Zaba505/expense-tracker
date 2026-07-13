@@ -11,15 +11,18 @@ name: CI
 #   dagger call integration-test   the emulator-backed tests, tagged `integration`
 #   dagger call image-smoke-test   the scratch image runs and serves on $PORT
 #   dagger call terraform validate deploy/ is formatted and the config is valid
+#   dagger call deploy             publish the image and roll Cloud Run onto it
 #
-# `ci` takes no --registry here, so it builds the images and publishes nothing;
-# publishing is a separate, deploy-time concern (#7).
+# The last one is the only leg that changes anything outside this run, and it
+# is fenced accordingly: it runs on a push to main, only after every check
+# above is green, and only in this repository — the credential it uses cannot
+# be minted anywhere else (deploy/wif.tf).
 #
-# Nothing here holds a cloud credential, and `terraform validate` is in that
+# The checks hold no cloud credential at all. `terraform validate` is in their
 # list precisely because it needs none: it initializes with `-backend=false`,
 # so it runs on a fork's pull request like every other leg. `plan` and `apply`
-# do need one, and they are not run from CI — they are run by hand, against a
-# short-lived token, until the deploy story (#7) sets up federation.
+# still need one and are still run by hand — provisioning an environment is
+# not a thing a push should do.
 
 on:
   push:
@@ -121,39 +124,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore engine image
-        id: engine-cache
-        uses: actions/cache/restore@v4
+      - name: Set up Dagger
+        uses: ./.github/actions/dagger
         with:
-          path: engine.tar.gz
-          key: dagger-engine-v${{ env.DAGGER_VERSION }}
-
-      # The `engine` job has already pulled and cached the image, so this is
-      # normally a load from disk. The pull is the fallback for a cache that was
-      # evicted between the two jobs.
-      - name: Load engine image
-        env:
-          CACHE_HIT: ${{ steps.engine-cache.outputs.cache-hit }}
-        run: |
-          set -euo pipefail
-          IMAGE="registry.dagger.io/engine:v${DAGGER_VERSION}"
-          if [ "$CACHE_HIT" = "true" ]; then
-            gunzip -c engine.tar.gz | docker load
-          else
-            for i in 1 2 3; do
-              timeout 300 docker pull "$IMAGE" && break
-              echo "engine pull attempt $i failed/timed out; retrying in 5s" >&2
-              sleep 5
-            done
-            docker image inspect "$IMAGE" >/dev/null
-          fi
-
-      - name: Install Dagger CLI
-        run: |
-          set -euo pipefail
-          curl -fsSL https://dl.dagger.io/dagger/install.sh \
-            | DAGGER_VERSION="${DAGGER_VERSION}" BIN_DIR="$HOME/.local/bin" sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          version: ${{ env.DAGGER_VERSION }}
 
       - name: dagger call ${{ matrix.check.call }}
         # Optional: with the secret unset this is empty and Dagger simply runs
@@ -161,3 +135,101 @@ jobs:
         env:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
         run: dagger call ${{ matrix.check.call }}
+
+  # Publish this commit's images and roll the Cloud Run service onto the
+  # server one. Like every leg above it is a single `dagger call` — the same
+  # command you can run by hand against your own project — so there is no
+  # CI-only deploy path to drift from the one a human uses:
+  #
+  #   dagger call deploy --project=<id> \
+  #     --access-token=cmd://"gcloud auth print-access-token"
+  #
+  # `needs: [check]` is the gate, and it is airtight in a way a separate
+  # workflow could not be: this job runs on the very commit the checks passed
+  # on, in the same run, from the same checkout.
+  #
+  # It is also not the only fence. The z5labs pipeline pushes only for a HEAD
+  # ref matching ^refs/heads/main$ (.dagger/main.go), so even a job that
+  # somehow ran elsewhere would publish nothing; and the token below can only
+  # be minted for a workflow in THIS repository (deploy/wif.tf) — a fork's
+  # pull request carries a fork's `repository` claim, which the pool rejects.
+  deploy:
+    name: Publish and deploy to Cloud Run
+    needs: [check]
+    # An unset GCP_PROJECT means no environment has been provisioned yet
+    # (deploy/README.md) — there is nothing to deploy to, so this is a skip
+    # rather than a failure. Set it and the deploy is live; the step below
+    # then insists on the other two variables rather than half-deploying.
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && vars.GCP_PROJECT != ''
+    runs-on: ubuntu-latest
+    # The whole z5labs pipeline again (lint, race tests, a multi-arch build of
+    # both binaries), then the push and the rollout. The rollout itself waits
+    # for the new revision to pass its startup probe.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      # Mint the OIDC token GCP federates. This is the only job that gets it,
+      # and it is the only credential in this workflow: there is no
+      # service-account key here or in the repository's secrets.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # These come from `dagger call terraform … output` and are repository
+      # *variables*, not secrets: a provider's resource name and a service
+      # account's email are addresses, not credentials — the credential is
+      # minted per run, below.
+      - name: Check the deploy variables are set
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          DEPLOYER_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "$WIF_PROVIDER" ] || missing="${missing} GCP_WIF_PROVIDER"
+          [ -n "$DEPLOYER_SERVICE_ACCOUNT" ] || missing="${missing} GCP_DEPLOYER_SERVICE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "::error::GCP_PROJECT is set, so this repository is meant to deploy — but these repository variables are not:${missing}." \
+                 "Every one of them is an output of the Terraform in deploy/; see deploy/README.md."
+            exit 1
+          fi
+
+      - name: Set up Dagger
+        uses: ./.github/actions/dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      # No key, anywhere. GitHub mints an OIDC token for this run, GCP's
+      # workload identity pool exchanges it for an access token good for the
+      # hour, and that token is the whole of what the deploy holds. What makes
+      # it safe is the pool's attribute condition, which is in deploy/wif.tf.
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      # That one token authenticates both halves of the deploy: the registry
+      # takes it as the password for `oauth2accesstoken`, and gcloud reads it
+      # from the environment. It reaches Dagger as a Secret (env://), so it is
+      # mounted into the execs that need it and is never baked into a layer.
+      - name: dagger call deploy
+        env:
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+          # Must be the region deploy/ was applied with; both default to
+          # us-central1 (deploy/variables.tf).
+          GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+        run: |
+          dagger call deploy \
+            --project="${GCP_PROJECT}" \
+            --region="${GCP_REGION}" \
+            --access-token=env://GCP_ACCESS_TOKEN
