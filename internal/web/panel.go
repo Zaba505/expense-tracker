@@ -31,14 +31,9 @@ import (
 // the panel is rendered both after an event was appended and after one was
 // refused, and only the caller knows which.
 func loadPanel(ctx context.Context, log eventlog.EventStore, month string, form view.Form) (view.Panel, error) {
-	events, err := loadEvents(ctx, log)
+	events, state, err := loadState(ctx, log)
 	if err != nil {
 		return view.Panel{}, err
-	}
-
-	state, err := projection.Fold(events)
-	if err != nil {
-		return view.Panel{}, fmt.Errorf("folding the log: %w", err)
 	}
 
 	rollups, err := projection.RollupByMonth(state)
@@ -64,6 +59,21 @@ func loadPanel(ctx context.Context, log eventlog.EventStore, month string, form 
 	}
 
 	return panel, nil
+}
+
+// loadState drains the log and folds it into the current state.
+func loadState(ctx context.Context, log eventlog.EventStore) ([]domain.Event, projection.State, error) {
+	events, err := loadEvents(ctx, log)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	state, err := projection.Fold(events)
+	if err != nil {
+		return nil, nil, fmt.Errorf("folding the log: %w", err)
+	}
+
+	return events, state, nil
 }
 
 // loadEvents drains the log into a slice, in the log's order.

@@ -316,6 +316,72 @@ func TestMonthView_RejectsMalformedMonths(t *testing.T) {
 	}
 }
 
+func TestReportView_RendersTheRequestedYear(t *testing.T) {
+	t.Parallel()
+
+	store := newStubStore()
+	for _, event := range []domain.Event{
+		{Action: domain.ActionAdd, Month: "2025-12", Type: "Mortgage", Amount: money.Cents(999_99), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-01", Type: "Rent", Amount: money.Cents(1200_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-01", Type: "Travel", Amount: money.Cents(240_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-01", Type: "Paycheck", Amount: money.Cents(3000_00), Direction: domain.DirectionIncome},
+		{Action: domain.ActionAdd, Month: "2026-02", Type: "Rent", Amount: money.Cents(1200_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-02", Type: "Groceries", Amount: money.Cents(120_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-02", Type: "Paycheck", Amount: money.Cents(3000_00), Direction: domain.DirectionIncome},
+		{Action: domain.ActionAdd, Month: "2027-01", Type: "Mortgage", Amount: money.Cents(888_88), Direction: domain.DirectionExpense},
+	} {
+		if _, err := store.Append(t.Context(), event); err != nil {
+			t.Fatalf("seeding the log with %+v: %v", event, err)
+		}
+	}
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, authn), "/reports/2026")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /reports/2026 status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"<h1>2026</h1>",
+		`href="/reports/2025"`,
+		`href="/reports/2027"`,
+		`href="/month/2026-01"`,
+		"Groceries",
+		"Paycheck",
+		"Rent",
+		"Travel",
+		">Total<",
+		">Average<",
+		"$6,000.00",
+		"$200.00",
+		"$270.00",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /reports/2026 body does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestReportView_RejectsMalformedYears(t *testing.T) {
+	t.Parallel()
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/reports/2026-07")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /reports/2026-07 status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
 func TestHome_NonOwnerSessionIsLoggedOut(t *testing.T) {
 	t.Parallel()
 

@@ -1,0 +1,66 @@
+package view
+
+import "github.com/Zaba505/expense-tracker/internal/projection"
+
+templ YearReport(signedInAs string, report projection.Year, previousYear string, nextYear string) {
+	@Layout("expense-tracker") {
+		@sessionBanner(signedInAs)
+		<section class="card report-card">
+			<div class="report-head">
+				<a href={ templ.SafeURL(ReportPath(previousYear)) }>{ "← " + previousYear }</a>
+				<h1>{ report.Year }</h1>
+				<a href={ templ.SafeURL(ReportPath(nextYear)) }>{ nextYear + " →" }</a>
+			</div>
+			<div class="table-scroll">
+				<table class="cells report-grid">
+					<thead>
+						<tr>
+							<th scope="col">Month</th>
+							for _, typ := range report.Types {
+								<th scope="col" class="amount">{ typ }</th>
+							}
+							<th scope="col" class="amount">Expenses</th>
+							<th scope="col" class="amount">Income</th>
+							<th scope="col" class="amount">Net</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, month := range report.Months {
+							<tr>
+								<th scope="row">
+									<a href={ templ.SafeURL(MonthPath(month.Month)) }>{ month.Month }</a>
+								</th>
+								for _, typ := range report.Types {
+									<td class="amount">{ month.Amount(typ).Display() }</td>
+								}
+								<td class="amount">{ month.Rollup.Expenses.Display() }</td>
+								<td class="amount">{ month.Rollup.Income.Display() }</td>
+								<td class="amount">{ month.Rollup.Net().Display() }</td>
+							</tr>
+						}
+					</tbody>
+					<tfoot>
+						<tr>
+							<th scope="row">Total</th>
+							for _, typ := range report.Types {
+								<td class="amount">{ report.Total.Amount(typ).Display() }</td>
+							}
+							<td class="amount">{ report.Total.Rollup.Expenses.Display() }</td>
+							<td class="amount">{ report.Total.Rollup.Income.Display() }</td>
+							<td class="amount">{ report.Total.Rollup.Net().Display() }</td>
+						</tr>
+						<tr>
+							<th scope="row">Average</th>
+							for _, typ := range report.Types {
+								<td class="amount">{ report.Average.Amount(typ).Display() }</td>
+							}
+							<td class="amount">{ report.Average.Rollup.Expenses.Display() }</td>
+							<td class="amount">{ report.Average.Rollup.Income.Display() }</td>
+							<td class="amount">{ report.Average.Rollup.Net().Display() }</td>
+						</tr>
+					</tfoot>
+				</table>
+			</div>
+		</section>
+	}
+}
