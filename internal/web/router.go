@@ -40,6 +40,7 @@ func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 	// "/{$}" matches only the root path; a bare "/" would make the home
 	// page a catch-all and swallow every 404.
 	mux.Handle("GET /{$}", handleHome(logger, store, authn))
+	mux.Handle("GET /month/{month}", handleMonth(logger, store, authn))
 
 	// The entry form's hx-post, mounted on the very path the form is rendered
 	// with, so the route and the markup cannot drift apart.
@@ -77,34 +78,54 @@ func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 // form, which is the same field they would use to record last March.
 func handleHome(logger *slog.Logger, log eventlog.EventStore, authn authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var email string
-		if session, ok := authn.Session(r); ok {
-			email = session.Email
-		}
+		renderMonthPage(w, r, logger, log, authn, domain.Month(time.Now()))
+	}
+}
 
-		month := domain.Month(time.Now())
-
-		// The fold happens before a byte is written, so a log that cannot be
-		// read is an honest 500 — unlike the render below, which cannot be.
-		panel, err := loadPanel(r.Context(), log, month, view.NewForm(month))
-		if err != nil {
-			logger.ErrorContext(r.Context(), "folding the log for the home page",
-				slog.String("month", month),
-				slog.Any("error", err),
-			)
-			http.Error(w, "the expenses could not be loaded", http.StatusInternalServerError)
+// handleMonth renders one requested month of the log.
+//
+// The month comes from the path rather than the clock, which is what makes the
+// route an addressable projection: opening /month/2026-07 shows July 2026 even
+// when the current month is years later. A malformed month is not "an empty
+// month"; it is not a month at all, so the route answers 404 rather than
+// pretending the log says something about it.
+func handleMonth(logger *slog.Logger, log eventlog.EventStore, authn authenticator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		month := r.PathValue("month")
+		if !domain.ValidMonth(month) {
+			http.NotFound(w, r)
 			return
 		}
+		renderMonthPage(w, r, logger, log, authn, month)
+	}
+}
 
-		// Logged, not answered with a 500: templ streams straight to the
-		// ResponseWriter, so by the time a render can fail the status line
-		// and part of the page are already on their way to the browser, and
-		// http.Error would only append its text to a half-written document.
-		// A truncated page the log explains beats a lie about it being whole.
-		if err := view.Home(email, panel).Render(r.Context(), w); err != nil {
-			logger.ErrorContext(r.Context(), "rendering the home page",
-				slog.Any("error", err),
-			)
-		}
+func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, log eventlog.EventStore, authn authenticator, month string) {
+	var email string
+	if session, ok := authn.Session(r); ok {
+		email = session.Email
+	}
+
+	// The fold happens before a byte is written, so a log that cannot be
+	// read is an honest 500 — unlike the render below, which cannot be.
+	panel, err := loadPanel(r.Context(), log, month, view.NewForm(month))
+	if err != nil {
+		logger.ErrorContext(r.Context(), "folding the log for the home page",
+			slog.String("month", month),
+			slog.Any("error", err),
+		)
+		http.Error(w, "the expenses could not be loaded", http.StatusInternalServerError)
+		return
+	}
+
+	// Logged, not answered with a 500: templ streams straight to the
+	// ResponseWriter, so by the time a render can fail the status line
+	// and part of the page are already on their way to the browser, and
+	// http.Error would only append its text to a half-written document.
+	// A truncated page the log explains beats a lie about it being whole.
+	if err := view.Home(email, panel).Render(r.Context(), w); err != nil {
+		logger.ErrorContext(r.Context(), "rendering the home page",
+			slog.Any("error", err),
+		)
 	}
 }
