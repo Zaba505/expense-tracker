@@ -2,6 +2,7 @@ package view
 
 import (
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/Zaba505/expense-tracker/internal/domain"
@@ -14,6 +15,10 @@ import (
 // the markup and the route the handler is mounted on are one decision, and
 // web mounts its handler on this same constant.
 const EntriesPath = "/entries"
+
+// TypeRenamesPath is where the type-rename form previews and records a rename
+// or merge across history.
+const TypeRenamesPath = "/type-renames"
 
 // MonthJumpPath is the GET endpoint the month jump control submits to.
 const MonthJumpPath = "/month"
@@ -61,6 +66,12 @@ type Panel struct {
 	// Form is the entry form's state — what is typed in it, and what was
 	// wrong with it.
 	Form Form
+
+	// TypeRenameForm is the retroactive rename/merge form's state.
+	TypeRenameForm TypeRenameForm
+
+	// TypeRenamePreview is the currently rendered rename impact preview, if any.
+	TypeRenamePreview projection.TypeRenamePreview
 }
 
 // Row is one folded cell: what a type came to in this month, in one
@@ -100,6 +111,12 @@ type Form struct {
 	RefEventID Field
 }
 
+// TypeRenameForm is the state of the retroactive rename/merge form.
+type TypeRenameForm struct {
+	FromType Field
+	ToType   Field
+}
+
 // NewForm is the empty form for a month: expense, add, nothing typed yet.
 //
 // The defaults are the domain's own — a direction the log defaults to
@@ -133,6 +150,16 @@ func (f Form) Cleared() Form {
 // whether the submission was refused and nothing was appended.
 func (f Form) Rejected() bool {
 	for _, field := range []Field{f.Month, f.Type, f.Amount, f.Direction, f.Action, f.Note, f.RefEventID} {
+		if field.Error != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// Rejected reports whether either type-rename field carries a message.
+func (f TypeRenameForm) Rejected() bool {
+	for _, field := range []Field{f.FromType, f.ToType} {
 		if field.Error != "" {
 			return true
 		}
@@ -198,3 +225,5 @@ func shiftMonth(month string, by int) string {
 	}
 	return domain.Month(t.AddDate(0, by, 0))
 }
+
+func Count(n int) string { return strconv.Itoa(n) }

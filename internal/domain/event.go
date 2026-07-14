@@ -28,6 +28,11 @@ const (
 	// what the spreadsheet import records, since a cell is a total rather
 	// than a transaction.
 	ActionSet Action = "set"
+
+	// ActionRenameType retroactively rewrites one type's name everywhere in
+	// history, without editing the events already in the log. It is what a
+	// typo cleanup or a merge of synonyms records.
+	ActionRenameType Action = "rename_type"
 )
 
 // Direction says which way money moved. It is a flag on the event rather
@@ -90,6 +95,10 @@ type Event struct {
 	// "Mortgage". Compared verbatim, so "Rent" and "rent" are two types.
 	Type string
 
+	// ToType is the target type of a rename or merge. It is only used when
+	// Action is ActionRenameType.
+	ToType string
+
 	// Amount is the money, in integer cents. Negative is allowed and
 	// meaningful: an add of a negative amount is how an overstatement is
 	// walked back.
@@ -117,7 +126,7 @@ type Event struct {
 }
 
 // Normalize returns a copy of e with the conventions of the log applied:
-// a zero Direction becomes DirectionExpense, Type and Note lose their
+// a zero Direction becomes DirectionExpense, Type, ToType, and Note lose their
 // surrounding whitespace, and RecordedAt is truncated to the log's
 // resolution and moved to UTC.
 //
@@ -133,6 +142,7 @@ func (e Event) Normalize() Event {
 		e.Direction = DirectionExpense
 	}
 	e.Type = strings.TrimSpace(e.Type)
+	e.ToType = strings.TrimSpace(e.ToType)
 	e.Note = strings.TrimSpace(e.Note)
 	if !e.RecordedAt.IsZero() {
 		e.RecordedAt = e.RecordedAt.UTC().Truncate(timeResolution)
@@ -173,13 +183,21 @@ func ValidMonth(s string) bool {
 // have filled.
 func (e Event) Validate() error {
 	if !e.Action.Valid() {
-		return fmt.Errorf("%w: action %q is not one of %q, %q", ErrInvalidEvent, e.Action, ActionAdd, ActionSet)
+		return fmt.Errorf("%w: action %q is not one of %q, %q, %q", ErrInvalidEvent, e.Action, ActionAdd, ActionSet, ActionRenameType)
 	}
 	if !ValidMonth(e.Month) {
 		return fmt.Errorf("%w: month %q is not a calendar month %q", ErrInvalidEvent, e.Month, monthLayout)
 	}
 	if e.Type == "" {
 		return fmt.Errorf("%w: type is empty", ErrInvalidEvent)
+	}
+	if e.Action == ActionRenameType {
+		if e.ToType == "" {
+			return fmt.Errorf("%w: toType is empty", ErrInvalidEvent)
+		}
+		if e.Type == e.ToType {
+			return fmt.Errorf("%w: type %q and toType %q are the same", ErrInvalidEvent, e.Type, e.ToType)
+		}
 	}
 	if !e.Direction.Valid() {
 		return fmt.Errorf("%w: direction %q is not one of %q, %q", ErrInvalidEvent, e.Direction, DirectionExpense, DirectionIncome)
@@ -200,7 +218,7 @@ func (e Event) Validate() error {
 // before there is an event for Validate to judge as a whole.
 func (a Action) Valid() bool {
 	switch a {
-	case ActionAdd, ActionSet:
+	case ActionAdd, ActionSet, ActionRenameType:
 		return true
 	default:
 		return false

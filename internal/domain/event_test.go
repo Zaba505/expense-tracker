@@ -44,11 +44,15 @@ func TestEvent_Normalize(t *testing.T) {
 	t.Run("type and note lose surrounding whitespace", func(t *testing.T) {
 		e := valid()
 		e.Type = "  Groceries \t"
+		e.ToType = "  Food \t"
 		e.Note = "  corrects the March total  "
 
 		got := e.Normalize()
 		if got.Type != "Groceries" {
 			t.Errorf("Normalize() left type %q, want %q — an untrimmed type is a second type that shadows the real one", got.Type, "Groceries")
+		}
+		if got.ToType != "Food" {
+			t.Errorf("Normalize() left toType %q, want %q", got.ToType, "Food")
 		}
 		if got.Note != "corrects the March total" {
 			t.Errorf("Normalize() left note %q, want %q", got.Note, "corrects the March total")
@@ -91,6 +95,12 @@ func TestEvent_Validate(t *testing.T) {
 			"an added expense": func(e *domain.Event) {},
 			"a set, as the import writes it": func(e *domain.Event) {
 				e.Action = domain.ActionSet
+			},
+			"a type rename across history": func(e *domain.Event) {
+				e.Action = domain.ActionRenameType
+				e.Type = "Groceries"
+				e.ToType = "Food"
+				e.Amount = 0
 			},
 			"income": func(e *domain.Event) {
 				e.Direction = domain.DirectionIncome
@@ -161,6 +171,14 @@ func TestEvent_Validate(t *testing.T) {
 			},
 			"an empty type": func(e *domain.Event) {
 				e.Type = ""
+			},
+			"a type rename with no target type": func(e *domain.Event) {
+				e.Action = domain.ActionRenameType
+				e.ToType = ""
+			},
+			"a type rename to itself": func(e *domain.Event) {
+				e.Action = domain.ActionRenameType
+				e.ToType = e.Type
 			},
 			"a type that is only whitespace": func(e *domain.Event) {
 				// Normalize trims it to empty; Validate is what refuses it.
@@ -273,11 +291,12 @@ func TestAction_Valid(t *testing.T) {
 	t.Parallel()
 
 	tests := map[domain.Action]bool{
-		domain.ActionAdd: true,
-		domain.ActionSet: true,
-		"":               false,
-		"subtract":       false,
-		"ADD":            false,
+		domain.ActionAdd:        true,
+		domain.ActionSet:        true,
+		domain.ActionRenameType: true,
+		"":                      false,
+		"subtract":              false,
+		"ADD":                   false,
 	}
 
 	for action, want := range tests {

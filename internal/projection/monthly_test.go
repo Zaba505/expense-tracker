@@ -190,6 +190,33 @@ func TestFold(t *testing.T) {
 		}
 	})
 
+	t.Run("a rename or merge replays history under the target type", func(t *testing.T) {
+		got, err := projection.Fold([]domain.Event{
+			event(domain.ActionSet, "2026-01", "Fuel", 40_00),
+			event(domain.ActionSet, "2026-01", "Gas", 10_00),
+			event(domain.ActionAdd, "2026-02", "Fuel", 15_00),
+			{
+				Action:     domain.ActionRenameType,
+				Month:      "2026-07",
+				Type:       "Fuel",
+				ToType:     "Gas",
+				Direction:  domain.DirectionExpense,
+				RecordedAt: time.Date(2026, 7, 12, 15, 5, 0, 0, time.UTC),
+			},
+		})
+		if err != nil {
+			t.Fatalf("Fold() error = %v", err)
+		}
+
+		want := projection.State{
+			{Month: "2026-01", Type: "Gas", Direction: domain.DirectionExpense}: 10_00,
+			{Month: "2026-02", Type: "Gas", Direction: domain.DirectionExpense}: 15_00,
+		}
+		if !equalState(got, want) {
+			t.Errorf("Fold() = %#v, want %#v", got, want)
+		}
+	})
+
 	t.Run("direction splits one month and type into two cells", func(t *testing.T) {
 		// A grocery rebate, recorded as income against the same type, is not
 		// a discount on the grocery bill: the $10 still went out and the

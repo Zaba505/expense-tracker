@@ -49,6 +49,7 @@ templ MonthPanel(p Panel) {
 			</div>
 		</form>
 		@entryForm(p.Form)
+		@typeRenameForm(p)
 		@monthTable(p)
 		@auditTrail(p)
 		@typeOptions(p.KnownTypes)
@@ -181,6 +182,97 @@ templ entryForm(f Form) {
 	</form>
 }
 
+templ typeRenameForm(p Panel) {
+	<form
+		class="entry"
+		action={ TypeRenamesPath }
+		method="post"
+		hx-post={ TypeRenamesPath }
+		hx-target={ PanelTarget }
+		hx-swap="outerHTML"
+	>
+		<input type="hidden" name="month" value={ p.Month }/>
+		<div class="field field-wide">
+			<label for="rename-from-type">Rename or merge from</label>
+			<input
+				id="rename-from-type"
+				type="text"
+				name="fromType"
+				value={ p.TypeRenameForm.FromType.Value }
+				list={ typesListID }
+				autocomplete="off"
+				placeholder="Fuel"
+				if p.TypeRenameForm.FromType.Error != "" {
+					aria-invalid="true"
+				}
+				required
+			/>
+			@fieldError(p.TypeRenameForm.FromType)
+		</div>
+		<div class="field field-wide">
+			<label for="rename-to-type">Into</label>
+			<input
+				id="rename-to-type"
+				type="text"
+				name="toType"
+				value={ p.TypeRenameForm.ToType.Value }
+				list={ typesListID }
+				autocomplete="off"
+				placeholder="Gas"
+				if p.TypeRenameForm.ToType.Error != "" {
+					aria-invalid="true"
+				}
+				required
+			/>
+			@fieldError(p.TypeRenameForm.ToType)
+		</div>
+		<div class="field field-submit">
+			<button class="button" type="submit" name="intent" value="preview">Preview rename</button>
+		</div>
+		<div class="field field-submit">
+			<button class="button" type="submit" name="intent" value="apply">Apply rename</button>
+		</div>
+	</form>
+	if p.TypeRenamePreview.AffectedEntries > 0 {
+		<section class="audit">
+			<h3>Rename preview</h3>
+			<p>
+				<strong>{ p.TypeRenamePreview.FromType }</strong>
+				<span>will become</span>
+				<strong>{ p.TypeRenamePreview.ToType }</strong>
+				<span>in</span>
+				<strong>{ Count(len(p.TypeRenamePreview.Months)) }</strong>
+				if len(p.TypeRenamePreview.Months) == 1 {
+					<span>month</span>
+				} else {
+					<span>months</span>
+				}
+				<span>across</span>
+				<strong>{ Count(p.TypeRenamePreview.AffectedEntries) }</strong>
+				if p.TypeRenamePreview.AffectedEntries == 1 {
+					<span>entry.</span>
+				} else {
+					<span>entries.</span>
+				}
+			</p>
+			<ul class="audit-trail">
+				for _, month := range p.TypeRenamePreview.Months {
+					<li class="audit-event">
+						<strong>{ month.Month }</strong>
+						<span>
+							if month.Entries == 1 {
+								{ " — 1 entry" }
+							} else {
+								{ " — " + Count(month.Entries) + " entries" }
+							}
+						</span>
+					</li>
+				}
+			</ul>
+		</section>
+	}
+}
+
 // fieldError is the message under the input it belongs to. It is a live region
 // so that a refusal announces itself: htmx swaps the panel in place, and
 // nothing else would tell a screen reader the page had changed.
@@ -245,41 +337,52 @@ templ auditTrail(p Panel) {
 							<code>{ event.ID }</code>
 							<span>{ RecordedAtDisplay(event.RecordedAt) }</span>
 						</div>
-						<p class="audit-summary">
-							<strong>{ string(event.Action) }</strong>
-							<span>{ event.Type }</span>
-							<span class="direction">{ string(event.Direction) }</span>
-							<span>for</span>
-							<span class="amount">{ event.Amount.Display() }</span>
-						</p>
+						if event.Action == domain.ActionRenameType {
+							<p class="audit-summary">
+								<strong>rename</strong>
+								<span>{ event.Type }</span>
+								<span>to</span>
+								<span>{ event.ToType }</span>
+							</p>
+						} else {
+							<p class="audit-summary">
+								<strong>{ string(event.Action) }</strong>
+								<span>{ event.Type }</span>
+								<span class="direction">{ string(event.Direction) }</span>
+								<span>for</span>
+								<span class="amount">{ event.Amount.Display() }</span>
+							</p>
+						}
 						if event.Note != "" {
 							<p class="muted">Note: { event.Note }</p>
 						}
 						if event.RefEventID != "" {
 							<p class="muted">Corrects { event.RefEventID }</p>
 						}
-						<div class="audit-actions">
-							<a class="button" href={ p.CorrectionPath(event) }>{ CorrectionLabel(event) }</a>
-							if CanVoid(event) {
-								<form
-									class="audit-void"
-									method="post"
-									action={ EntriesPath }
-									hx-post={ EntriesPath }
-									hx-target={ PanelTarget }
-									hx-swap="outerHTML"
-								>
-									<input type="hidden" name="month" value={ event.Month }/>
-									<input type="hidden" name="type" value={ event.Type }/>
-									<input type="hidden" name="amount" value={ VoidAmount(event) }/>
-									<input type="hidden" name="direction" value={ string(event.Direction) }/>
-									<input type="hidden" name="action" value={ string(domain.ActionAdd) }/>
-									<input type="hidden" name="note" value={ VoidNote(event) }/>
-									<input type="hidden" name="refEventId" value={ event.ID }/>
-									<button class="button" type="submit">Void</button>
-								</form>
-							}
-						</div>
+						if event.Action != domain.ActionRenameType {
+							<div class="audit-actions">
+								<a class="button" href={ p.CorrectionPath(event) }>{ CorrectionLabel(event) }</a>
+								if CanVoid(event) {
+									<form
+										class="audit-void"
+										method="post"
+										action={ EntriesPath }
+										hx-post={ EntriesPath }
+										hx-target={ PanelTarget }
+										hx-swap="outerHTML"
+									>
+										<input type="hidden" name="month" value={ event.Month }/>
+										<input type="hidden" name="type" value={ event.Type }/>
+										<input type="hidden" name="amount" value={ VoidAmount(event) }/>
+										<input type="hidden" name="direction" value={ string(event.Direction) }/>
+										<input type="hidden" name="action" value={ string(domain.ActionAdd) }/>
+										<input type="hidden" name="note" value={ VoidNote(event) }/>
+										<input type="hidden" name="refEventId" value={ event.ID }/>
+										<button class="button" type="submit">Void</button>
+									</form>
+								}
+							</div>
+						}
 					</li>
 				}
 			</ol>

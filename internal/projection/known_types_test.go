@@ -68,6 +68,26 @@ func TestKnownTypes(t *testing.T) {
 		}
 		assertKnownTypes(t, got, want)
 	})
+
+	t.Run("a rename or merge removes the old type from the list across history", func(t *testing.T) {
+		got := projection.KnownTypes([]domain.Event{
+			eventAt(domain.ActionAdd, "2026-01", "Fuel", 8_400, time.Date(2026, 1, 10, 9, 0, 0, 0, time.UTC)),
+			eventAt(domain.ActionAdd, "2026-02", "Gas", 9_100, time.Date(2026, 2, 10, 9, 0, 0, 0, time.UTC)),
+			{
+				Action:     domain.ActionRenameType,
+				Month:      "2026-07",
+				Type:       "Fuel",
+				ToType:     "Gas",
+				Direction:  domain.DirectionExpense,
+				RecordedAt: time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC),
+			},
+		})
+
+		want := []projection.KnownType{
+			{Type: "Gas", LastUsedMonth: "2026-02"},
+		}
+		assertKnownTypes(t, got, want)
+	})
 }
 
 func eventAt(action domain.Action, month, typ string, amount int64, recordedAt time.Time) domain.Event {

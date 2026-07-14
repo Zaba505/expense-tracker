@@ -52,6 +52,7 @@ func newHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 	// The entry form's hx-post uses view.EntriesPath, so this route is mounted
 	// on that same shared constant and cannot drift from the markup.
 	mux.Handle("POST "+view.EntriesPath, handleEntry(logger, store))
+	mux.Handle("POST "+view.TypeRenamesPath, handleTypeRename(logger, store))
 
 	// The sign-in flow: /auth/login sends the browser to Google,
 	// /auth/callback is the URI Google is registered to send it back to.

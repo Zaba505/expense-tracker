@@ -2,7 +2,6 @@ package projection
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/money"
@@ -108,18 +107,13 @@ func keyOf(e domain.Event) Key {
 // as trustworthy as the keys it is built from.
 func Fold(events []domain.Event) (State, error) {
 	state := make(State)
+	canonical, _, err := compileHistory(events)
+	if err != nil {
+		return nil, err
+	}
 
-	for i, e := range events {
-		handle, ok := handlers[e.Action]
-		if !ok {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownAction, e.Action)
-		}
-
-		e = e.Normalize()
-		if !e.Direction.Valid() {
-			return nil, fmt.Errorf("%w: %q (event %d, id %q, month %q, type %q)", ErrUnknownDirection, e.Direction, i, e.ID, e.Month, e.Type)
-		}
-
+	for _, e := range canonical {
+		handle := handlers[e.Action]
 		handle(state, e)
 	}
 

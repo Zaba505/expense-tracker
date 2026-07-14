@@ -200,6 +200,7 @@ func runEventStoreConformance(t *testing.T, newStore storeFactory) {
 				Action:     domain.ActionSet,
 				Month:      "2021-03",
 				Type:       "Rent",
+				ToType:     "Housing",
 				Amount:     money.Cents(-1_234_56),
 				Direction:  domain.DirectionIncome,
 				Note:       "double-counted in the sheet",
@@ -424,6 +425,7 @@ func equal(a, b domain.Event) bool {
 		a.Action == b.Action &&
 		a.Month == b.Month &&
 		a.Type == b.Type &&
+		a.ToType == b.ToType &&
 		a.Amount == b.Amount &&
 		a.Direction == b.Direction &&
 		a.Note == b.Note &&
