@@ -15,7 +15,7 @@ log. Money is stored as `int64` cents throughout.
 ```
 cmd/
   server/        HTTP application (Cloud Run)
-  importer/      one-off: sheet CSV -> events
+  importer/      one-off: sheet (converted to parquet) -> events
 internal/
   config/        env-driven config, fails fast on missing required values
   money/         integer-cents money type
