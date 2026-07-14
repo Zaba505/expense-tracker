@@ -98,6 +98,8 @@ func ProjectYear(state State, year string) (Year, error) {
 
 		switch key.Direction {
 		case domain.DirectionExpense, "":
+			// The zero value means "expense" in the older projection state too, so a
+			// report that folds existing data must treat it the same way.
 			report.Months[i].Rollup.Expenses += amount
 			report.Total.Rollup.Expenses += amount
 		case domain.DirectionIncome:
