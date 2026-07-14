@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Zaba505/expense-tracker/internal/domain"
 )
@@ -62,6 +64,52 @@ type EventStore interface {
 	Load(ctx context.Context) iter.Seq2[domain.Event, error]
 }
 
+// UniqueAppender is the log plus one more way in: an append that carries
+// the caller's own name for the fact it is appending, and that refuses to
+// append the same fact twice.
+//
+// It is a second interface rather than two more lines on EventStore
+// because only one caller has any business with it. The web handlers take
+// EventStore, and what they can do to the log is exactly what that
+// interface says they can — appending what the owner just typed. Replaying
+// a five-year-old spreadsheet row under a key of the caller's choosing is
+// the importer's job and nobody else's, and an interface is the cheapest
+// place to say so: a handler cannot call a method it was never handed.
+//
+// Both implementations satisfy it, and the conformance suite holds both to
+// it, for the reason EventStore's own suite exists — an idempotence that
+// only Memory has is an idempotence the import does not have.
+type UniqueAppender interface {
+	EventStore
+
+	// AppendUnique writes e to the log under key, unless the log already
+	// holds an event under that key — in which case nothing is written and
+	// the error is ErrDuplicateKey.
+	//
+	// It exists because an append-only log cannot take a write back. The
+	// importer replays five years of a spreadsheet, and a re-run — after a
+	// crash, a half-finished import, a network that dropped in the middle —
+	// must not append a second copy of every row it already appended. The
+	// key is the caller's name for the fact rather than the store's: the
+	// importer derives one per source row, so "have I imported this row"
+	// has an answer that outlives the process that asked.
+	//
+	// The key becomes the event's ID. That is deliberate, and it is what
+	// keeps the guarantee honest: the record of what has been imported is
+	// the log itself, not a second collection of keys beside it that a
+	// half-finished run could leave disagreeing with the events.
+	//
+	// The check is atomic with the write, not a read the caller does first.
+	// Two importers racing must not both find the key absent and both
+	// append — and no caller can get that by looking before it leaps.
+	//
+	// key must be able to name a document: non-empty, valid UTF-8, no
+	// slash, not "." or "..", not "__…__", and at most MaxKeyLen bytes.
+	// Anything else is ErrInvalidKey. Every other rule Append obeys — the
+	// defaults it fills in, the events it refuses — applies here unchanged.
+	AppendUnique(ctx context.Context, key string, e domain.Event) (domain.Event, error)
+}
+
 // ErrEventAppended is returned by Append when the event it is handed
 // already carries an ID — that is, when it has already been appended.
 // Appending it again would either duplicate the fact or, if the store
@@ -69,9 +117,30 @@ type EventStore interface {
 // exists to prevent, so it is refused.
 var ErrEventAppended = errors.New("eventlog: event already has an ID; the log is append-only")
 
+// ErrDuplicateKey is returned by AppendUnique when the log already holds
+// an event under the key it was given.
+//
+// It is not a failure. An importer re-running over rows it has already
+// imported expects it for every one of them, and getting it for every one
+// of them is what a safe re-run looks like — so callers have to tell it
+// apart from a write that actually went wrong, with errors.Is, rather than
+// reading any error out of a batch of appends as a broken import.
+var ErrDuplicateKey = errors.New("eventlog: an event with this key is already in the log")
+
+// ErrInvalidKey is returned by AppendUnique when the key it was given
+// cannot name a document.
+var ErrInvalidKey = errors.New("eventlog: invalid key")
+
+// MaxKeyLen is the longest key AppendUnique accepts, in bytes: Firestore's
+// limit on a document ID.
+const MaxKeyLen = 1500
+
 var (
 	_ EventStore = (*Store)(nil)
 	_ EventStore = (*Memory)(nil)
+
+	_ UniqueAppender = (*Store)(nil)
+	_ UniqueAppender = (*Memory)(nil)
 )
 
 // prepare is the write path every store shares: it turns a caller's event
@@ -104,4 +173,44 @@ func prepare(e domain.Event, now func() time.Time) (domain.Event, error) {
 		return domain.Event{}, err
 	}
 	return e, nil
+}
+
+// prepareKeyed is prepare for the keyed write path: the key has to be
+// good before the event is worth looking at, since a key that cannot name
+// a document is a caller bug rather than a bad row.
+func prepareKeyed(key string, e domain.Event, now func() time.Time) (domain.Event, error) {
+	if err := checkKey(key); err != nil {
+		return domain.Event{}, err
+	}
+	return prepare(e, now)
+}
+
+// checkKey reports whether key can name a document in the events
+// collection.
+//
+// The rules are Firestore's, and Memory is held to every one of them —
+// that is the point of two implementations behind one interface, and it is
+// load-bearing here, because Firestore does not refuse these keys
+// politely. A slash does not fail: it addresses a subcollection, so the
+// event lands at a path the log's queries never look at, and an import
+// that reported success would be missing rows nothing can find. A "__x__"
+// key collides with the namespace Firestore reserves for itself. Each of
+// them is a write that cannot be taken back, so each of them is refused
+// before it is attempted, in the one place both stores go through.
+func checkKey(key string) error {
+	switch {
+	case key == "":
+		return fmt.Errorf("%w: the key is empty", ErrInvalidKey)
+	case len(key) > MaxKeyLen:
+		return fmt.Errorf("%w: the key is %d bytes, the limit is %d", ErrInvalidKey, len(key), MaxKeyLen)
+	case !utf8.ValidString(key):
+		return fmt.Errorf("%w: the key is not valid UTF-8", ErrInvalidKey)
+	case strings.Contains(key, "/"):
+		return fmt.Errorf("%w: the key %q has a slash in it, which would address a subcollection rather than name a document", ErrInvalidKey, key)
+	case key == "." || key == "..":
+		return fmt.Errorf("%w: the key %q is a path element, not a name", ErrInvalidKey, key)
+	case strings.HasPrefix(key, "__") && strings.HasSuffix(key, "__"):
+		return fmt.Errorf("%w: the key %q is in the namespace Firestore reserves for itself", ErrInvalidKey, key)
+	}
+	return nil
 }

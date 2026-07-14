@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -25,10 +26,33 @@ import (
 // silently, into a log that cannot be edited. Here the script simply does
 // not emit a row for a rollup column, because a rollup is not an event.
 type row struct {
-	Month       string `parquet:"month"`
-	Type        string `parquet:"type"`
-	AmountCents int64  `parquet:"amount_cents"`
-	Direction   string `parquet:"direction"`
+	Month string `parquet:"month"`
+	Type  string `parquet:"type"`
+
+	// A pointer, so that a NULL can be told from a zero.
+	//
+	// They are the same int64 otherwise, and they are not remotely the same
+	// fact: a zero is a cell the owner zeroed out, and a NULL is a cell the
+	// conversion script had nothing to say about. Decoded into a plain int64
+	// they are both 0, and the row would import as a set of $0.00 — a month
+	// where that type cost nothing, permanently, in a log with no undo, and
+	// indistinguishable from a deliberate zeroing.
+	//
+	// It is not a hypothetical: a nullable INT64 is what pandas and pyarrow
+	// write for any column with a gap in it, and it has the same
+	// parquet.Kind as a required one, so the schema check waves it through.
+	// The other three columns escape this only by luck — a NULL decodes them
+	// to "", which the per-row checks already refuse — and the amount is the
+	// one field with no illegal value to fall back on.
+	//
+	// A pointer reads both shapes: an optional column yields nil for a NULL,
+	// and a required column always yields a value. So the tolerant thing and
+	// the safe thing are the same thing — the file a script writes by
+	// default is accepted, and only the rows that are actually missing an
+	// amount are refused.
+	AmountCents *int64 `parquet:"amount_cents"`
+
+	Direction string `parquet:"direction"`
 }
 
 // inputColumns is the schema the input must have, checked before a single
@@ -52,6 +76,13 @@ type row struct {
 // appended. The schema is therefore checked, not trusted, and the amount is
 // required to be an integer count of cents — the one representation that
 // cannot quietly lose a factor of a hundred.
+//
+// What this check deliberately does not do is insist the columns be required
+// rather than optional. A nullable column has the same Kind as a required one
+// and would pass here regardless, and refusing every optional column would
+// refuse the file pandas writes by default. The gap that leaves — a NULL
+// amount, which decodes as a zero and would import as a set of $0.00 — is
+// closed a row at a time instead. See row.AmountCents.
 var inputColumns = []struct {
 	name string
 	kind parquet.Kind
@@ -76,6 +107,17 @@ func (e *rowError) Error() string {
 
 func (e *rowError) Unwrap() error { return e.Err }
 
+// duplicateCellError reports two rows for the same cell of the sheet.
+type duplicateCellError struct {
+	First, Second int
+	Event         domain.Event
+}
+
+func (e *duplicateCellError) Error() string {
+	return fmt.Sprintf("importer: rows %d and %d are both the cell %s / %s / %s; a cell is one event, and a sheet with two totals for one cell does not say which of them is the total",
+		e.First, e.Second, e.Event.Month, e.Event.Type, e.Event.Direction)
+}
+
 // parseParquet translates the converted sheet into the events to import.
 //
 // now is handed in rather than read from the clock so that the clamp in
@@ -95,6 +137,18 @@ func parseParquet(r io.ReaderAt, size int64, now time.Time) ([]domain.Event, err
 		return nil, fmt.Errorf("importer: read parquet: %w", err)
 	}
 
+	// The row each cell of the sheet was last seen at. Two rows for one cell
+	// is a file the importer cannot honor: both would become set events for
+	// the same month and type, so the second would supersede the first — and
+	// a set replayed from a sheet is dated at the month it belongs to, not at
+	// the moment it was read, so the two would land at one instant and the
+	// fold would apply them in whichever order their IDs happened to sort. A
+	// number the owner never chose would be the one the month came out at.
+	//
+	// It is also, mechanically, the one file the append could not carry out:
+	// one cell is one key, and the log takes a key once.
+	cells := make(map[string]int, len(rows))
+
 	events := make([]domain.Event, 0, len(rows))
 	for i, in := range rows {
 		// One-based, so a number here names the same row the script's own
@@ -103,6 +157,15 @@ func parseParquet(r io.ReaderAt, size int64, now time.Time) ([]domain.Event, err
 
 		if !domain.ValidMonth(in.Month) {
 			return nil, &rowError{Row: number, Column: "month", Err: fmt.Errorf("invalid month %q", in.Month)}
+		}
+
+		// A row with no amount at all. Refused rather than read as zero,
+		// because zero is a legal amount — a set of zero is how a type is
+		// zeroed out for a month — so there is no value the domain could
+		// reject on this one's behalf. It has to be caught here or not at
+		// all. See row.AmountCents.
+		if in.AmountCents == nil {
+			return nil, &rowError{Row: number, Column: "amount_cents", Err: errors.New("the row has no amount; a blank is not a zero")}
 		}
 
 		// Checked before Normalize, which is the whole point: Normalize
@@ -121,7 +184,7 @@ func parseParquet(r io.ReaderAt, size int64, now time.Time) ([]domain.Event, err
 			Action:     domain.ActionSet,
 			Month:      in.Month,
 			Type:       in.Type,
-			Amount:     money.Cents(in.AmountCents),
+			Amount:     money.Cents(*in.AmountCents),
 			Direction:  domain.Direction(in.Direction),
 			RecordedAt: recordedAt(in.Month, now, i),
 		}.Normalize()
@@ -129,6 +192,17 @@ func parseParquet(r io.ReaderAt, size int64, now time.Time) ([]domain.Event, err
 		if err := event.Validate(); err != nil {
 			return nil, &rowError{Row: number, Column: columnAtFault(event), Err: err}
 		}
+
+		// Keyed off the normalized event, so a type written with a trailing
+		// space is the same cell as one without — which is what the fold will
+		// make of them, and the importer has to agree with the fold about what
+		// a cell is or it will happily append two events the month view then
+		// reads as one.
+		key := importKey(event)
+		if first, seen := cells[key]; seen {
+			return nil, &duplicateCellError{First: first, Second: number, Event: event}
+		}
+		cells[key] = number
 
 		events = append(events, event)
 	}

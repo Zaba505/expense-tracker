@@ -62,7 +62,7 @@ func newStore(t *testing.T, projectID string) *eventlog.Store {
 // breaking its ties are ones Firestore invented at random rather than
 // ones a counter handed out in order.
 func TestStore(t *testing.T) {
-	runEventStoreConformance(t, func(t *testing.T) eventlog.EventStore {
+	runEventStoreConformance(t, func(t *testing.T) eventlog.UniqueAppender {
 		// A project per subtest, because the emulator namespaces data by
 		// project and Load reads the whole log: one shared project would
 		// have every subtest folding in the events of the ones before it.

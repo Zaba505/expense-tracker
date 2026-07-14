@@ -26,7 +26,12 @@ import (
 // storeFactory builds an empty store to run one subtest against. Each
 // subtest gets its own, because Load reads the whole log: a store shared
 // with the previous subtest would hand this one that subtest's events.
-type storeFactory func(t *testing.T) eventlog.EventStore
+//
+// It yields a UniqueAppender rather than an EventStore because the suite
+// covers the keyed write path too. The importer is the only caller of it,
+// and it is the caller with the least room to be wrong: it writes five
+// years of history that nothing can delete afterwards.
+type storeFactory func(t *testing.T) eventlog.UniqueAppender
 
 // runEventStoreConformance runs the whole contract against one
 // implementation.
@@ -181,6 +186,210 @@ func runEventStoreConformance(t *testing.T, newStore storeFactory) {
 			if got[0].Amount != event().Amount {
 				t.Errorf("the stored amount is %s, want the original %s; a re-append rewrote history", got[0].Amount, event().Amount)
 			}
+		})
+	})
+
+	t.Run("AppendUnique", func(t *testing.T) {
+		const key = "import-7d1f0c2a"
+
+		t.Run("makes the key the event's ID", func(t *testing.T) {
+			// The importer reads it back this way: a row it has already
+			// imported is found by looking for its key among the IDs the log
+			// yields. If the key were not the ID, the log would have no
+			// record of what had been imported, and a re-run would have
+			// nothing to recognize.
+			store := newStore(t)
+
+			got, err := store.AppendUnique(t.Context(), key, event())
+			if err != nil {
+				t.Fatalf("AppendUnique: %v", err)
+			}
+			if got.ID != key {
+				t.Errorf("AppendUnique returned the ID %q, want the key %q", got.ID, key)
+			}
+
+			stored := loadAll(t, store)
+			if len(stored) != 1 {
+				t.Fatalf("loaded %d events, want 1", len(stored))
+			}
+			if stored[0].ID != key {
+				t.Errorf("the stored event's ID is %q, want the key %q", stored[0].ID, key)
+			}
+		})
+
+		t.Run("refuses a second event under the same key", func(t *testing.T) {
+			// The whole point: this is what a re-run of the importer hits on
+			// every row it has already imported, and what stops five years of
+			// history from being appended to the log twice.
+			store := newStore(t)
+
+			if _, err := store.AppendUnique(t.Context(), key, event()); err != nil {
+				t.Fatalf("AppendUnique: %v", err)
+			}
+
+			second := event()
+			second.Amount = money.Cents(999_999)
+
+			if _, err := store.AppendUnique(t.Context(), key, second); !errors.Is(err, eventlog.ErrDuplicateKey) {
+				t.Errorf("a second AppendUnique under %q gave %v, want ErrDuplicateKey", key, err)
+			}
+
+			// And it refused rather than overwrote. An append-only log that
+			// replaces the event under a key it already holds is not an
+			// append-only log, and the amount is how that shows.
+			got := loadAll(t, store)
+			if len(got) != 1 {
+				t.Fatalf("the log holds %d events, want the 1 that was appended", len(got))
+			}
+			if got[0].Amount != event().Amount {
+				t.Errorf("the stored amount is %s, want the original %s; the second append overwrote the first", got[0].Amount, event().Amount)
+			}
+		})
+
+		t.Run("appends a second event under a different key", func(t *testing.T) {
+			// The key is the only identity. Two events that are equal in
+			// every field are still two facts, and the log takes both — which
+			// is what keeps the importer's key, rather than the shape of a
+			// row, in charge of what counts as a duplicate.
+			store := newStore(t)
+
+			for _, k := range []string{key, key + "-b"} {
+				if _, err := store.AppendUnique(t.Context(), k, event()); err != nil {
+					t.Fatalf("AppendUnique(%q): %v", k, err)
+				}
+			}
+
+			if got := loadAll(t, store); len(got) != 2 {
+				t.Errorf("the log holds %d events, want 2", len(got))
+			}
+		})
+
+		t.Run("does not collide with an unkeyed append", func(t *testing.T) {
+			// The importer's events and the owner's live in one collection.
+			// An event the app appended must not be mistaken for an imported
+			// row, or the importer would skip a row it had never imported.
+			store := newStore(t)
+
+			appended, err := store.Append(t.Context(), event())
+			if err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			if appended.ID == key {
+				t.Fatalf("Append happened to assign the ID %q, which this test uses as a key", key)
+			}
+
+			if _, err := store.AppendUnique(t.Context(), key, event()); err != nil {
+				t.Errorf("AppendUnique after an unrelated Append: %v", err)
+			}
+			if got := loadAll(t, store); len(got) != 2 {
+				t.Errorf("the log holds %d events, want 2", len(got))
+			}
+		})
+
+		t.Run("keeps a recordedAt the caller supplied", func(t *testing.T) {
+			// As Append does, and for the same reason — this is the path the
+			// import actually takes, so it is the one that has to date a
+			// replayed row at the month it belongs to.
+			store := newStore(t)
+
+			e := event()
+			e.RecordedAt = time.Date(2021, 3, 14, 9, 26, 53, 0, time.UTC)
+
+			got, err := store.AppendUnique(t.Context(), key, e)
+			if err != nil {
+				t.Fatalf("AppendUnique: %v", err)
+			}
+			if !got.RecordedAt.Equal(e.RecordedAt) {
+				t.Errorf("AppendUnique moved recordedAt to %s, want the supplied %s", got.RecordedAt, e.RecordedAt)
+			}
+		})
+
+		t.Run("defaults an unstated direction to expense", func(t *testing.T) {
+			// Every default Append fills, this one fills too. A keyed write
+			// path that skipped them would be a second set of rules for the
+			// same log, and the importer would be the one caller living under
+			// them.
+			store := newStore(t)
+
+			e := event()
+			e.Direction = ""
+
+			got, err := store.AppendUnique(t.Context(), key, e)
+			if err != nil {
+				t.Fatalf("AppendUnique: %v", err)
+			}
+			if got.Direction != domain.DirectionExpense {
+				t.Errorf("AppendUnique returned direction %q, want %q", got.Direction, domain.DirectionExpense)
+			}
+		})
+
+		t.Run("refuses an event it cannot vouch for", func(t *testing.T) {
+			store := newStore(t)
+
+			e := event()
+			e.Month = "2026-13"
+
+			if _, err := store.AppendUnique(t.Context(), key, e); !errors.Is(err, domain.ErrInvalidEvent) {
+				t.Errorf("AppendUnique gave %v, want ErrInvalidEvent", err)
+			}
+
+			if got := loadAll(t, store); len(got) != 0 {
+				t.Errorf("the log holds %d events after a refused append, want 0", len(got))
+			}
+		})
+
+		t.Run("refuses an event that was already appended", func(t *testing.T) {
+			store := newStore(t)
+
+			appended, err := store.AppendUnique(t.Context(), key, event())
+			if err != nil {
+				t.Fatalf("AppendUnique: %v", err)
+			}
+
+			if _, err := store.AppendUnique(t.Context(), key+"-b", appended); !errors.Is(err, eventlog.ErrEventAppended) {
+				t.Errorf("AppendUnique of an event with an ID gave %v, want ErrEventAppended", err)
+			}
+		})
+
+		t.Run("refuses a key that cannot name a document", func(t *testing.T) {
+			// Firestore does not refuse all of these itself. A slash makes
+			// the write land in a subcollection — a document the log's query
+			// never reads — so the import would report a row written that no
+			// fold will ever see. Both stores refuse them before they are
+			// attempted.
+			keys := map[string]string{
+				"empty":              "",
+				"a slash":            "import/7d1f0c2a",
+				"a path element":     "..",
+				"a reserved name":    "__id7__",
+				"longer than a name": strings.Repeat("k", eventlog.MaxKeyLen+1),
+			}
+
+			for name, bad := range keys {
+				t.Run(name, func(t *testing.T) {
+					store := newStore(t)
+
+					if _, err := store.AppendUnique(t.Context(), bad, event()); !errors.Is(err, eventlog.ErrInvalidKey) {
+						t.Errorf("AppendUnique with %s as the key gave %v, want ErrInvalidKey", name, err)
+					}
+					if got := loadAll(t, store); len(got) != 0 {
+						t.Errorf("the log holds %d events after a refused append, want 0", len(got))
+					}
+				})
+			}
+		})
+
+		t.Run("reports a cancelled context as cancellation", func(t *testing.T) {
+			store := newStore(t)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+
+			_, err := store.AppendUnique(ctx, key, event())
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("AppendUnique on a cancelled context gave %v, want context.Canceled", err)
+			}
+			wantAttributed(t, "AppendUnique on a cancelled context", err)
 		})
 	})
 

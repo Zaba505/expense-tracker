@@ -28,7 +28,34 @@ var update = flag.Bool("update", false, "regenerate testdata/sample.parquet")
 // in it, income in both. It is the converted spreadsheet in miniature.
 const samplePath = "testdata/sample.parquet"
 
-var sampleRows = []row{
+// sourceRow is a row as a conversion script writes it: the amount is a plain
+// required INT64, with no way to be absent.
+//
+// The importer reads into `row`, whose amount is a *pointer*, because the file
+// it is handed is not necessarily this one — a nullable column is what pandas
+// writes for anything with a gap in it, and a NULL there must not read as a
+// zero. Writing the strict shape here and reading the tolerant one there is
+// what puts both under test: this is the file the script is supposed to
+// produce, and the nullable cases below are the ones it produces by accident.
+type sourceRow struct {
+	Month       string `parquet:"month"`
+	Type        string `parquet:"type"`
+	AmountCents int64  `parquet:"amount_cents"`
+	Direction   string `parquet:"direction"`
+}
+
+// nullableRow is the same schema with an optional amount — the column pandas
+// and pyarrow write whenever the source had a blank in it.
+type nullableRow struct {
+	Month       string `parquet:"month"`
+	Type        string `parquet:"type"`
+	AmountCents *int64 `parquet:"amount_cents"`
+	Direction   string `parquet:"direction"`
+}
+
+func cents(v int64) *int64 { return &v }
+
+var sampleRows = []sourceRow{
 	{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "expense"},
 	{Month: "2026-01", Type: "Groceries", AmountCents: 24_567, Direction: "expense"},
 	{Month: "2026-01", Type: "Monthly Spend", AmountCents: 7_500, Direction: "expense"},
@@ -135,6 +162,44 @@ func TestParseParquetChecksSchema(t *testing.T) {
 		assertErrorContains(t, err, `column "direction" is INT64, want BYTE_ARRAY`)
 	})
 
+	t.Run("a blank amount is refused, not read as zero", func(t *testing.T) {
+		// The one that gets through everything else. A nullable INT64 has the
+		// same parquet.Kind as a required one, so the schema check passes it,
+		// and a NULL decodes into a plain int64 as 0 — which is a legal amount,
+		// so nothing downstream can refuse it either. The row would import as a
+		// set of $0.00: that type cost nothing that month, permanently.
+		r := writeParquet(t, []nullableRow{
+			{"2026-01", "Rent", cents(120_000), "expense"},
+			{"2026-01", "Groceries", nil, "expense"},
+		})
+
+		_, err := parseParquet(r, r.Size(), importedAt)
+
+		var rowErr *rowError
+		if !errors.As(err, &rowErr) {
+			t.Fatalf("parseParquet() = %v, want a *rowError; a blank amount imported as $0.00", err)
+		}
+		if rowErr.Row != 2 || rowErr.Column != "amount_cents" {
+			t.Errorf("parseParquet() = %+v, want row 2, column amount_cents", rowErr)
+		}
+	})
+
+	t.Run("an optional column with no blanks in it is fine", func(t *testing.T) {
+		// The common case, and the reason the blank is refused per row rather
+		// than the column being refused outright: a nullable column is simply
+		// what a pandas script writes, and there is nothing wrong with one
+		// whose rows all have amounts.
+		r := writeParquet(t, []nullableRow{{"2026-01", "Rent", cents(120_000), "expense"}})
+
+		got, err := parseParquet(r, r.Size(), importedAt)
+		if err != nil {
+			t.Fatalf("parseParquet() = %v, want an optional column accepted", err)
+		}
+		if len(got) != 1 || got[0].Amount != 120_000 {
+			t.Errorf("parseParquet() = %+v, want the one row at $1,200.00", got)
+		}
+	})
+
 	t.Run("columns the importer has no opinion about are ignored", func(t *testing.T) {
 		// A script is free to carry provenance — which cell a row came from.
 		type withProvenance struct {
@@ -169,39 +234,39 @@ func TestParseParquetChecksSchema(t *testing.T) {
 func TestParseParquetReportsTheRowAtFault(t *testing.T) {
 	tests := []struct {
 		name   string
-		rows   []row
+		rows   []sourceRow
 		row    int
 		column string
 	}{
 		{
 			name:   "a month that is not a calendar month",
-			rows:   []row{{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "expense"}, {Month: "January 2026", Type: "Rent", AmountCents: 120_000, Direction: "expense"}},
+			rows:   []sourceRow{{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "expense"}, {Month: "January 2026", Type: "Rent", AmountCents: 120_000, Direction: "expense"}},
 			row:    2,
 			column: "month",
 		},
 		{
 			// "2026-7" sorts after December, so the month has to be zero-padded.
 			name:   "a month that is not zero-padded",
-			rows:   []row{{Month: "2026-7", Type: "Rent", AmountCents: 120_000, Direction: "expense"}},
+			rows:   []sourceRow{{Month: "2026-7", Type: "Rent", AmountCents: 120_000, Direction: "expense"}},
 			row:    1,
 			column: "month",
 		},
 		{
 			name:   "a direction that is neither expense nor income",
-			rows:   []row{{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "outgoing"}},
+			rows:   []sourceRow{{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "outgoing"}},
 			row:    1,
 			column: "direction",
 		},
 		{
 			// The row said nothing, so the importer refuses to say expense for it.
 			name:   "a direction left empty",
-			rows:   []row{{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: ""}},
+			rows:   []sourceRow{{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: ""}},
 			row:    1,
 			column: "direction",
 		},
 		{
 			name:   "a type left empty",
-			rows:   []row{{Month: "2026-01", Type: "   ", AmountCents: 120_000, Direction: "expense"}},
+			rows:   []sourceRow{{Month: "2026-01", Type: "   ", AmountCents: 120_000, Direction: "expense"}},
 			row:    1,
 			column: "type",
 		},
@@ -234,7 +299,7 @@ func TestParseParquetReportsTheRowAtFault(t *testing.T) {
 // owner makes before the month arrives. A set supersedes the sets before it, so
 // the import would win and the edit would vanish until the month came around.
 func TestParseParquetClampsFutureMonths(t *testing.T) {
-	r := writeParquet(t, []row{
+	r := writeParquet(t, []sourceRow{
 		{Month: "2026-06", Type: "Rent", AmountCents: 120_000, Direction: "expense"},
 		{Month: "2026-08", Type: "Rent", AmountCents: 125_000, Direction: "expense"},
 		{Month: "2026-09", Type: "Rent", AmountCents: 125_000, Direction: "expense"},
@@ -262,6 +327,73 @@ func TestParseParquetClampsFutureMonths(t *testing.T) {
 			t.Fatalf("event for %s recorded at %s, want before a correction made at %s", event.Month, event.RecordedAt, correction)
 		}
 	}
+}
+
+// TestParseParquetRefusesTwoRowsForOneCell covers the file the importer cannot
+// honor: two totals for one cell of the sheet.
+//
+// Both rows would become set events for the same month, type and direction, and
+// a replayed set is dated at the month it belongs to rather than at the moment
+// it was read — so the two would land at the same instant and the fold would
+// apply them in whatever order their IDs happened to sort. The month would come
+// out at one of the two amounts, chosen by nothing, and stay that way in a log
+// that cannot be edited. There is no reading of such a file that is safe to
+// guess at, so it is refused whole.
+func TestParseParquetRefusesTwoRowsForOneCell(t *testing.T) {
+	t.Run("the same cell twice", func(t *testing.T) {
+		r := writeParquet(t, []sourceRow{
+			{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "expense"},
+			{Month: "2026-01", Type: "Groceries", AmountCents: 24_567, Direction: "expense"},
+			{Month: "2026-01", Type: "Rent", AmountCents: 125_000, Direction: "expense"},
+		})
+
+		_, err := parseParquet(r, r.Size(), importedAt)
+
+		var dup *duplicateCellError
+		if !errors.As(err, &dup) {
+			t.Fatalf("parseParquet() = %v, want *duplicateCellError", err)
+		}
+		if dup.First != 1 || dup.Second != 3 {
+			t.Errorf("parseParquet() blamed rows %d and %d, want 1 and 3", dup.First, dup.Second)
+		}
+		assertErrorContains(t, err, "2026-01 / Rent / expense")
+	})
+
+	t.Run("a cell whose type differs only by whitespace", func(t *testing.T) {
+		// "Rent " and "Rent" are one type: Normalize trims, so the fold reads
+		// them as one cell — and the importer has to agree with the fold about
+		// what a cell is, or it would append two events the month view then
+		// shows as one.
+		r := writeParquet(t, []sourceRow{
+			{Month: "2026-01", Type: "Rent", AmountCents: 120_000, Direction: "expense"},
+			{Month: "2026-01", Type: "Rent ", AmountCents: 125_000, Direction: "expense"},
+		})
+
+		_, err := parseParquet(r, r.Size(), importedAt)
+
+		var dup *duplicateCellError
+		if !errors.As(err, &dup) {
+			t.Fatalf("parseParquet() = %v, want *duplicateCellError", err)
+		}
+	})
+
+	t.Run("one month and type in both directions is two cells", func(t *testing.T) {
+		// Not a duplicate: the direction is part of what a cell is, both here
+		// and in the fold, so a type that was both paid and refunded in a month
+		// is two rows and stays two rows.
+		r := writeParquet(t, []sourceRow{
+			{Month: "2026-01", Type: "Health", AmountCents: 12_000, Direction: "expense"},
+			{Month: "2026-01", Type: "Health", AmountCents: 4_000, Direction: "income"},
+		})
+
+		got, err := parseParquet(r, r.Size(), importedAt)
+		if err != nil {
+			t.Fatalf("parseParquet() = %v, want both rows accepted", err)
+		}
+		if len(got) != 2 {
+			t.Errorf("parseParquet() = %d events, want 2", len(got))
+		}
+	})
 }
 
 func TestParseParquetRejectsAFileThatIsNotParquet(t *testing.T) {

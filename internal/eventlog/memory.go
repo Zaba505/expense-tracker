@@ -30,6 +30,7 @@ import (
 type Memory struct {
 	mu     sync.RWMutex
 	events []domain.Event
+	ids    map[string]struct{}
 	seq    int64
 }
 
@@ -62,19 +63,81 @@ func (m *Memory) Append(ctx context.Context, e domain.Event) (domain.Event, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Zero-padded so that the IDs sort lexicographically, which is all the
-	// load order asks of them: it breaks ties on RecordedAt by ID, and
-	// only needs that comparison to be total and stable.
-	//
-	// It happens to make ties fall in append order here, where Firestore's
-	// random IDs make them fall arbitrarily. Do not build on that — a test
-	// that depends on it is a test that passes against Memory and fails in
-	// production. EventStore.Load says what may be relied on.
-	m.seq++
-	e.ID = fmt.Sprintf("%020d", m.seq)
-
-	m.events = append(m.events, e)
+	e.ID = m.nextID()
+	m.store(e)
 	return e, nil
+}
+
+// AppendUnique records e under key unless key is taken, and returns
+// ErrDuplicateKey if it is. It implements UniqueAppender.
+//
+// The key is the event's ID, exactly as in the Firestore store — where the
+// key is the document's name — so an importer that has already imported a
+// row finds it here the same way it finds it there, and a test of a re-run
+// is a test of the re-run that happens in production.
+func (m *Memory) AppendUnique(ctx context.Context, key string, e domain.Event) (domain.Event, error) {
+	// The key and the event before the context, for the reason Append
+	// takes them in that order: a bad argument is bad whether or not the
+	// caller is still waiting to hear about it.
+	e, err := prepareKeyed(key, e, time.Now)
+	if err != nil {
+		return domain.Event{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.Event{}, fmt.Errorf("eventlog: appending event: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Checked under the same lock that takes the key, not before it: two
+	// goroutines appending the same key must not both find it free. That is
+	// what Firestore's Create gives for free, and Memory is only worth
+	// testing an importer against if it gives it too.
+	if _, taken := m.ids[key]; taken {
+		return domain.Event{}, fmt.Errorf("%w: %s", ErrDuplicateKey, key)
+	}
+
+	e.ID = key
+	m.store(e)
+	return e, nil
+}
+
+// nextID returns an unused sequence ID. It is called with the lock held.
+//
+// Zero-padded so that the IDs sort lexicographically, which is all the
+// load order asks of them: it breaks ties on RecordedAt by ID, and only
+// needs that comparison to be total and stable.
+//
+// It happens to make ties fall in append order here, where Firestore's
+// random IDs make them fall arbitrarily. Do not build on that — a test
+// that depends on it is a test that passes against Memory and fails in
+// production. EventStore.Load says what may be relied on.
+//
+// The loop skips whatever a keyed append has already claimed. Nothing in
+// this app would hand AppendUnique a key that looks like one of these —
+// the importer's are hashes — but Firestore would refuse the collision
+// rather than overwrite, and a Memory that quietly kept two events under
+// one ID would have stopped standing in for it.
+func (m *Memory) nextID() string {
+	for {
+		m.seq++
+		id := fmt.Sprintf("%020d", m.seq)
+		if _, taken := m.ids[id]; !taken {
+			return id
+		}
+	}
+}
+
+// store records an event and its ID. It is called with the lock held, and
+// lazily builds the ID set, so the zero Memory is still a log ready to be
+// appended to.
+func (m *Memory) store(e domain.Event) {
+	if m.ids == nil {
+		m.ids = make(map[string]struct{})
+	}
+	m.ids[e.ID] = struct{}{}
+	m.events = append(m.events, e)
 }
 
 // Load streams the log in the log's total order — RecordedAt, then ID. It

@@ -105,6 +105,81 @@ that accepts writes but cannot serve reads. Liveness deliberately touches
 nothing: restarting the container cannot fix a database that is down, so
 folding Firestore into liveness would turn a blip into a restart loop.
 
+## Importing the spreadsheet — `cmd/importer`
+
+The five years of history that lived in a spreadsheet are loaded by
+`cmd/importer`, from a **Parquet** file rather than the sheet's own CSV
+export. A conversion script — the owner's, ad hoc, run once — unpivots the
+sheet into **one row per event** and says what each row is: `month`, `type`,
+`amount_cents`, `direction`. A column heading cannot say whether the number
+under it is a bill, a paycheck, or a formula, so a wide export would leave
+the importer guessing, silently, into a log that cannot be edited afterwards.
+The rollup columns simply produce no rows, because a rollup is not an event.
+
+```sh
+importer -file history.parquet -dry-run    # what it would do
+importer -file history.parquet             # do it
+```
+
+The project comes from `-project` or `GCP_PROJECT`; set `-emulator-host` or
+`FIRESTORE_EMULATOR_HOST` to point it at an emulator instead of the live
+database. The report goes to stdout, the log to stderr.
+
+**Re-running it is safe, and is how an interrupted import is meant to be
+finished.** Every row is appended under an idempotency key derived from the
+cell it came from — the month, the type, and the direction, which are exactly
+the three fields the fold keys a cell by. The key *is* the Firestore document
+ID, so the check that a row has not already been imported is Firestore's
+`Create` refusing a document that is already there: it is atomic with the
+write, and two importers racing cannot both find a row absent and both append
+it. It also means there is no state file to keep and no ledger to fall out of
+step with the log — **the record of what has been imported is the log**.
+
+The amount is deliberately *not* part of the key. A row whose figure was
+edited in the sheet after it was imported is therefore recognized as the cell
+it already is, reported as a **divergence**, and left alone:
+
+```
+divergences (1)
+The log already holds these cells, with a different amount. Nothing was
+written for them.
+
+  row 1     2026-01 / Rent (expense)
+            log    $1,200.00
+            sheet  $1,250.00
+```
+
+The importer never argues with the log about the past. Were the amount in the
+key, an edited row would mint a fresh key and land as a *second* `set` event
+for a cell that already had one — and since a replayed row is dated at the
+first instant of the month it belongs to, the two would tie on `recorded_at`
+and the fold would pick between them by document ID, which is to say
+arbitrarily. Corrections belong in the app, where they are dated when they are
+made and so land last, on purpose. A divergence exits non-zero; everything
+else in the file is still imported.
+
+The same rule protects entries the **app** made first. "A correction in the app
+lands last" holds because an entry made *during* a month is later than the first
+instant of it — but the app lets you enter a month before it arrives (next
+month's rent is knowable), and such an entry is *older* than the row the import
+would date at the month's start. It would be superseded. So the rule is stated
+rather than inferred from the calendar: **an imported row is appended only when
+it would sort strictly before every event the log already has for that cell.**
+When it would not, nothing is written and the row is reported as a **conflict** —
+the sheet does not get to overrule what you entered.
+
+If a run dies partway — a laptop that slept, a network that dropped — the report
+still prints, saying how many rows landed and that the rollups are therefore
+unknown. What was appended is correct and keyed; re-running finishes the job.
+
+Finally, the report prints **what each month folds to** — expenses, income,
+net — to be read against the sheet's own rollup columns. It is a table for a
+human rather than a diff against a machine-readable copy of those columns,
+because there is nothing to diff against: `Monthly Bills Total`, `Income` and
+`Savings` were *formulas*, and here they are recomputed from the events on
+every read. A side file of expected totals would be a copy of a number the
+fold already derives, and a copy is a thing that can be wrong.
+
 ## Front end
 
 HTML is rendered on the server with [templ](https://templ.guide) and made
