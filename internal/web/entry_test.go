@@ -477,12 +477,19 @@ func TestEntry_OffersTheLogsTypesForAutocomplete(t *testing.T) {
 		Action: domain.ActionAdd, Month: "2026-01", Type: "Insurance",
 		Amount: money.Cents(80_00), Direction: domain.DirectionExpense,
 	})
+	seed(t, store, domain.Event{
+		Action: domain.ActionAdd, Month: "2026-06", Type: "Utilities",
+		Amount: money.Cents(12_00), Direction: domain.DirectionExpense,
+	})
 
 	form := entry()
 	form.Set("type", "Kayak Repairs") // a type made up on the spot
 	rec := postEntry(t, handler, form)
 
 	body := rec.Body.String()
+	if !strings.Contains(body, `name="type"`) || !strings.Contains(body, `list="known-types"`) {
+		t.Errorf("the type input is not wired to the known-types datalist:\n%s", body)
+	}
 	if !strings.Contains(body, `<option value="Kayak Repairs">`) {
 		t.Errorf("the type just recorded is not offered for autocomplete:\n%s", body)
 	}
@@ -490,6 +497,16 @@ func TestEntry_OffersTheLogsTypesForAutocomplete(t *testing.T) {
 	// known types span the log, not the month on screen.
 	if !strings.Contains(body, `<option value="Insurance">`) {
 		t.Errorf("a type from another month is not offered for autocomplete:\n%s", body)
+	}
+	if !strings.Contains(body, `<option value="Utilities">`) {
+		t.Errorf("a recently used type is not offered for autocomplete:\n%s", body)
+	}
+
+	kayak := strings.Index(body, `<option value="Kayak Repairs">`)
+	utilities := strings.Index(body, `<option value="Utilities">`)
+	insurance := strings.Index(body, `<option value="Insurance">`)
+	if !(kayak < utilities && utilities < insurance) {
+		t.Errorf("autocomplete options are not newest-first in the response:\n%s", body)
 	}
 }
 
