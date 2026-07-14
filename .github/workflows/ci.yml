@@ -13,6 +13,10 @@ name: CI
 #   dagger call terraform validate deploy/ is formatted and the config is valid
 #   dagger call deploy             publish the image and roll Cloud Run onto it
 #
+# The one exception is `codegen`, which is a `dagger develop` rather than a
+# `dagger call`: it regenerates .dagger/'s committed client and fails if that
+# changed anything. It has to be its own job for that reason, not a matrix leg.
+#
 # The last one is the only leg that changes anything outside this run, and it
 # is fenced accordingly: it runs on a push to main, only after every check
 # above is green, and only in this repository — the credential it uses cannot
@@ -136,6 +140,50 @@ jobs:
           DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
         run: dagger call ${{ matrix.check.call }}
 
+  # .dagger/'s generated client (dagger.gen.go, internal/dagger/) is committed,
+  # which is what lets plain Go tooling work in that module on a fresh checkout —
+  # it is the only importer of the module's requirements, so without it
+  # `go mod tidy` prunes every one of them and empties go.mod. The price of
+  # committing it is that it can now go stale, in two ways this job catches
+  # equally: a module edit that was never regenerated, and an `engineVersion`
+  # bump that was never regenerated against. Both produce output that differs
+  # from the checkout, so both fail here.
+  codegen:
+    name: Dagger's generated client is current
+    needs: [engine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Dagger
+        uses: ./.github/actions/dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: dagger develop
+        env:
+          DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
+        run: dagger develop
+
+      - name: Fail if it wrote anything
+        run: |
+          set -euo pipefail
+          # Staged, not `git diff --exit-code` on the worktree: a plain diff is
+          # blind to a file that is entirely new, and adding a module dependency
+          # generates exactly that (a new client under internal/dagger/).
+          #
+          # Scoped to what `dagger develop` actually writes, because the workspace
+          # is not clean to begin with: `Set up Dagger` restores the cached engine
+          # image to ./engine.tar.gz, and a bare `git add -A` stages that instead.
+          git add -A -- .dagger dagger.json
+          if ! git diff --cached --quiet; then
+            echo "::error::.dagger/'s generated client is stale. Run \`dagger develop\` and commit what it writes."
+            git diff --cached --stat
+            exit 1
+          fi
+
   # Publish this commit's images and roll the Cloud Run service onto the
   # server one. Like every leg above it is a single `dagger call` — the same
   # command you can run by hand against your own project — so there is no
@@ -144,9 +192,9 @@ jobs:
   #   dagger call deploy --project=<id> \
   #     --access-token=cmd://"gcloud auth print-access-token"
   #
-  # `needs: [check]` is the gate, and it is airtight in a way a separate
-  # workflow could not be: this job runs on the very commit the checks passed
-  # on, in the same run, from the same checkout.
+  # `needs: [check, codegen]` is the gate, and it is airtight in a way a
+  # separate workflow could not be: this job runs on the very commit the checks
+  # passed on, in the same run, from the same checkout.
   #
   # It is also not the only fence. The z5labs pipeline pushes only for a HEAD
   # ref matching ^refs/heads/main$ (.dagger/main.go), so even a job that
@@ -155,7 +203,7 @@ jobs:
   # pull request carries a fork's `repository` claim, which the pool rejects.
   deploy:
     name: Publish and deploy to Cloud Run
-    needs: [check]
+    needs: [check, codegen]
     # An unset GCP_PROJECT means no environment has been provisioned yet
     # (deploy/README.md) — there is nothing to deploy to, so this is a skip
     # rather than a failure. Set it and the deploy is live; the step below

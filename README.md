@@ -425,22 +425,34 @@ template, regenerate before building:
 go tool templ generate
 ```
 
-Unlike the Dagger codegen below, the generated `*_templ.go` files **are
-committed**: the build pipeline deliberately does not run `templ generate`,
-so a fresh checkout has to already compile. CI re-runs the command
-(`dagger call templ-check`) and fails if the result differs from what was
-committed — if that trips, you edited a `.templ` without regenerating.
+The generated `*_templ.go` files **are committed**: the build pipeline
+deliberately does not run `templ generate`, so a fresh checkout has to
+already compile. CI re-runs the command (`dagger call templ-check`) and
+fails if the result differs from what was committed — if that trips, you
+edited a `.templ` without regenerating.
 
 ### Working on the Dagger module itself
 
-`.dagger/` is a normal Go Dagger module. After editing `.dagger/main.go`,
-regenerate its client and list functions:
+`.dagger/` is a normal Go Dagger module. After editing it, regenerate its
+client and list functions:
 
 ```sh
 dagger develop
 dagger functions
 ```
 
-Codegen (`.dagger/internal/dagger`, `.dagger/dagger.gen.go`) is
-git-ignored and regenerated on demand — only `.dagger/main.go`,
-`.dagger/go.mod`, `.dagger/go.sum`, and `dagger.json` are committed.
+Commit whatever `dagger develop` writes. The generated client
+(`.dagger/dagger.gen.go`, `.dagger/internal/dagger/`) is committed for the
+same reason `*_templ.go` is — a fresh checkout has to compile without first
+running a code generator — but here there is a second, sharper reason: that
+client is the *only* importer of `.dagger/go.mod`'s requirements. Where it
+does not exist, `go mod tidy` finds every requirement unused and deletes
+them all, silently, and the module can no longer be generated at all. So the
+one Go tooling rule in `.dagger/` is: **never run `go mod tidy`, `go get`,
+or `go mod edit` in there** — dependency changes come from `dagger develop`,
+which writes the requirements and the client that uses them together. Every
+other Go tool (`go build`, `go vet`, gopls) works in there normally.
+
+CI regenerates and fails the run if the committed client is stale — from a
+module edit that was not regenerated, or an `engineVersion` bump that was
+not regenerated against.

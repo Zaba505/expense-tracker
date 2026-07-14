@@ -1,3 +1,9 @@
+# Collapse the generated client in PR diffs and keep it out of the language
+# stats. `dagger develop` owns this file — it re-appends any of these entries it
+# does not find here — so none of them can be dropped, including the telemetry
+# one, which matches nothing at engineVersion v0.21.7 (that code now arrives as
+# the external github.com/dagger/otel-go dependency instead of being generated).
+# Leaving it costs nothing: it is a diff hint for a path that does not exist.
 /dagger.gen.go linguist-generated
 /internal/dagger/** linguist-generated
 /internal/telemetry/** linguist-generated

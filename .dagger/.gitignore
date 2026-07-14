@@ -1,4 +1,22 @@
-/dagger.gen.go
-/internal/dagger
-/internal/telemetry
+# Dagger's generated client — /dagger.gen.go and /internal/dagger — is COMMITTED,
+# not ignored. It is the only importer of this module's requirements, so where it
+# does not exist `go mod tidy` finds every one of them unused and empties go.mod
+# (#40). Committing it is also what lets plain Go tooling — go build, go vet,
+# gopls — work in here on a fresh checkout with no Dagger CLI installed.
+#
+# The `!` lines are load-bearing twice over.
+#
+# They say what we mean: these paths are not ignored, so a client file that is
+# entirely *new* — adding a module dependency generates one — is visible to
+# `git add` rather than silently absent from the commit.
+#
+# And they hold off `dagger develop`, which re-appends any of its default ignore
+# entries it cannot find in this file. Delete them and the next run re-arms the
+# trap. If CI's `codegen` job reports this file as modified, that is what
+# happened.
+
 /.env
+
+!/dagger.gen.go
+!/internal/dagger
+!/internal/telemetry
