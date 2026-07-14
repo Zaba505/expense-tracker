@@ -17,38 +17,44 @@ wrong one. `README.md` explains all of it at length; this is the short version.
 In the **root** module, normal Go tooling is correct and expected: `go mod tidy`,
 `go get`, `go build ./...`, `go test ./...`. Nothing below restricts it.
 
-## `.dagger/` is Dagger-owned — do not use Go tooling on it
+## `.dagger/`'s dependencies belong to Dagger, not to the Go CLI
 
-**Never run `go mod tidy`, `go get`, or `go mod edit` inside `.dagger/`.** On a
-fresh checkout, `go mod tidy` deletes **every `require`** from `.dagger/go.mod` —
-exiting 0 and printing nothing, so there is no error to warn you.
+**Never run `go mod tidy`, `go get`, or `go mod edit` inside `.dagger/`.**
+`dagger develop` owns this module's requirements *and* its generated client, and
+writes the two as one consistent pair. A Go dependency command edits one half of
+that pair from outside, and nothing puts it back.
 
-Why: every requirement in `.dagger/go.mod` — `genqlient`, `querybuilder`,
-`gqlparser`, the OpenTelemetry stack — is imported *only* by generated code
-(`.dagger/dagger.gen.go`, `.dagger/internal/dagger/`, `.dagger/internal/telemetry/`),
-which is **git-ignored**. On a fresh checkout that code does not exist, so
-`go mod tidy` sees every requirement as unused and drops it. The module can then
-no longer be generated, and every `dagger call` — i.e. all of CI — fails.
+Every *other* Go tool is fine in here — `go build`, `go vet`, `go test`, gopls.
+The module compiles on a fresh checkout with no Dagger CLI installed, because the
+generated client is committed.
 
-The `replace` directives survive, which is what makes the wreckage easy to miss:
-the diff looks like a tidy-up that merely pruned unused dependencies. It is not.
-The only correct `go.mod` here is the committed one.
+That is also the only thing keeping `go mod tidy` honest, and the margin is
+thinner than it looks. Every requirement in `.dagger/go.mod` — `genqlient`,
+`querybuilder`, `gqlparser`, `otel-go` — is imported *only* by the generated
+client. While that client is committed and current, tidy is a no-op. Delete it,
+or tidy mid-regeneration, and tidy finds every requirement unused and drops the
+lot — **exiting 0 and printing nothing**. The `replace` directives survive, so
+the diff reads like a harmless prune of dead dependencies. It is not: the module
+can no longer be generated, and every `dagger call` — i.e. all of CI — fails.
+That is #40. Do not re-open the hole.
 
 The rules:
 
 - Dependency changes go through **`dagger develop`**, never the Go CLI.
-- `.dagger/dagger.gen.go` and `.dagger/internal/` are generated, git-ignored, and
-  must not be committed or hand-edited. Do not "fix" a missing import there.
-- Only `.dagger/*.go` (hand-written), `.dagger/go.mod`, `.dagger/go.sum`, and
-  `dagger.json` are committed.
-- If a `.dagger/**` file fails to compile in an editor because
-  `dagger/expense-tracker/internal/dagger` is missing, that is expected — run
-  `dagger develop` to generate it. It is not a broken import to repair.
+- `.dagger/dagger.gen.go` and `.dagger/internal/dagger/` are generated but
+  **committed**. Never hand-edit them. Every change to them is something
+  `dagger develop` wrote, committed alongside the module edit that caused it — a
+  CI leg regenerates and fails the run if the committed client has gone stale.
+- If a `.dagger/**` file fails to compile because
+  `dagger/expense-tracker/internal/dagger` is missing, the fix is
+  `dagger develop` — not a new import, a vendored file, or a `go.mod` edit.
 - `dagger.json` pins the engine version and the shared `z5labs` dependency. Its
   `engineVersion` must stay in step with `env.DAGGER_VERSION` in
-  `.github/workflows/ci.yml`; a CI job fails the run if they drift.
+  `.github/workflows/ci.yml`; a CI job fails the run if they drift. Bumping it
+  also means re-running `dagger develop` and committing what it writes.
 
-After editing the module: `dagger develop && dagger functions`.
+After editing the module: `dagger develop && dagger functions` — and commit what
+`dagger develop` wrote.
 
 ## Build entrypoints — there is no Makefile and no Dockerfile
 
@@ -77,15 +83,20 @@ dagger call emulator --seed up --ports 8085:8085   # just the emulator, for a `g
 inner loop, but it skips the `integration`-tagged tests, which need an emulator —
 those only run under `dagger call integration-test`.
 
-## Generated code: templ is committed, Dagger's is not
+## Generated code is committed — templ's and Dagger's alike
 
-- **`*_templ.go` IS committed.** The build pipeline deliberately does not run
-  templ, so a fresh checkout has to already compile. After editing any `.templ`,
-  run **`go tool templ generate`** (templ is pinned by the `tool` directive in
-  `go.mod` — use `go tool`, not a `templ` on your `PATH`, or the version-stamped
-  output will differ) and commit the result. `dagger call templ-check` fails CI if
-  it is stale.
-- **Dagger's generated code is NOT committed** — see above.
+Neither is generated by the build, so a fresh checkout has to already compile.
+The rule for both: regenerate with the tool, never by hand, and commit the
+result in the same change. CI regenerates and fails the run on any drift.
+
+- **`*_templ.go`.** After editing any `.templ`, run **`go tool templ generate`**
+  (templ is pinned by the `tool` directive in `go.mod` — use `go tool`, not a
+  `templ` on your `PATH`, or the version-stamped output will differ). Gated by
+  `dagger call templ-check`.
+- **`.dagger/dagger.gen.go` and `.dagger/internal/dagger/`.** Written by
+  **`dagger develop`** at the `engineVersion` `dagger.json` pins. Gated by the
+  `codegen` job in `.github/workflows/ci.yml`. See above for why this one is not
+  merely a convention: uncommitted, it is a loaded gun pointed at `go.mod`.
 
 ## Terraform runs only through Dagger
 
@@ -133,5 +144,6 @@ lowercase.
 ## Before you open a PR
 
 `dagger call check` and, if you touched a `.templ`, `go tool templ generate`. If
-you touched `.dagger/`, confirm `.dagger/go.mod` still lists its requirements —
-an emptied `require` block means a Go command was run in there.
+you touched `.dagger/`, run `dagger develop` and commit anything it writes; then
+confirm `.dagger/go.mod` still lists its requirements — an emptied `require`
+block means a Go dependency command was run in there.
