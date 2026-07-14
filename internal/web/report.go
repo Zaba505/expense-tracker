@@ -28,10 +28,7 @@ func handleReport(logger *slog.Logger, log eventlog.EventStore, authn authentica
 }
 
 func renderYearPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, log eventlog.EventStore, authn authenticator, year string) {
-	var email string
-	if session, ok := authn.Session(r); ok {
-		email = session.Email
-	}
+	email := sessionEmail(authn, r)
 
 	report, err := loadYear(r.Context(), log, year)
 	if err != nil {

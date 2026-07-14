@@ -68,16 +68,17 @@ templ trendPicker(page TrendPage) {
 }
 
 // trendNote says what the summaries are an average of, because a trend's rows
-// and its footer count different months: the rows are the log's whole range and
-// the footer is only the months this type was recorded in.
+// and its footer count different months: the rows run the whole span of the
+// type and the footer is only the months it came to something.
 templ trendNote(t projection.Trend) {
 	<p class="muted trend-note">
 		<span>Recorded in</span>
 		<strong>{ strconv.Itoa(t.Observed) }</strong>
-		<span>of</span>
+		<span>of the</span>
 		<strong>{ strconv.Itoa(len(t.Months)) }</strong>
-		<span>{ Plural(len(t.Months), "month", "months") + "." }</span>
-		<span>The summaries are over the recorded months; a gap is a month the log says nothing about.</span>
+		<span>{ Plural(len(t.Months), "month", "months") }</span>
+		<span>{ "between " + t.Months[0].Month + " and " + t.Months[len(t.Months)-1].Month + "." }</span>
+		<span>The summaries are over the recorded months; a gap is a month this type came to nothing in.</span>
 	</p>
 }
 
