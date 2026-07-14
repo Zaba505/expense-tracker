@@ -15,6 +15,9 @@ import (
 // web mounts its handler on this same constant.
 const EntriesPath = "/entries"
 
+// MonthJumpPath is the GET endpoint the month jump control submits to.
+const MonthJumpPath = "/month"
+
 // PanelID names the month panel element, and PanelTarget is the selector htmx
 // swaps it by.
 //
@@ -179,3 +182,19 @@ func VoidNote(e domain.Event) string { return "voids " + e.ID }
 
 // RecordedAtDisplay is the audit-trail rendering of one event timestamp.
 func RecordedAtDisplay(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 UTC") }
+
+func PreviousMonthPath(month string) string { return MonthPath(shiftMonth(month, -1)) }
+
+func NextMonthPath(month string) string { return MonthPath(shiftMonth(month, 1)) }
+
+func PreviousMonth(month string) string { return shiftMonth(month, -1) }
+
+func NextMonth(month string) string { return shiftMonth(month, 1) }
+
+func shiftMonth(month string, by int) string {
+	t, err := time.Parse("2006-01", month)
+	if err != nil {
+		return month
+	}
+	return domain.Month(t.AddDate(0, by, 0))
+}

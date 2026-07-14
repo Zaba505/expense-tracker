@@ -15,8 +15,39 @@ import (
 templ MonthPanel(p Panel) {
 	<section id={ PanelID } class="card panel">
 		<header class="panel-head">
+			<a
+				href={ templ.SafeURL(PreviousMonthPath(p.Month)) }
+				hx-get={ PreviousMonthPath(p.Month) }
+				hx-target={ PanelTarget }
+				hx-swap="outerHTML"
+				hx-push-url="true"
+			>{ "← " + PreviousMonth(p.Month) }</a>
 			<h2>{ p.Month }</h2>
+			<a
+				href={ templ.SafeURL(NextMonthPath(p.Month)) }
+				hx-get={ NextMonthPath(p.Month) }
+				hx-target={ PanelTarget }
+				hx-swap="outerHTML"
+				hx-push-url="true"
+			>{ NextMonth(p.Month) + " →" }</a>
 		</header>
+		<form
+			class="entry"
+			action={ MonthJumpPath }
+			method="get"
+			hx-get={ MonthJumpPath }
+			hx-target={ PanelTarget }
+			hx-swap="outerHTML"
+			hx-push-url="true"
+		>
+			<div class="field">
+				<label for="jump-month">Jump to month</label>
+				<input id="jump-month" type="month" name="month" value={ p.Month } required/>
+			</div>
+			<div class="field field-submit">
+				<button class="button" type="submit">Go</button>
+			</div>
+		</form>
 		@entryForm(p.Form)
 		@monthTable(p)
 		@auditTrail(p)
