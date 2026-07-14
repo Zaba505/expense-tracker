@@ -171,6 +171,9 @@ func TestEntry_AnswersWithTheFoldedMonth(t *testing.T) {
 	if !strings.Contains(body, `<td class="amount">$15.00</td>`) {
 		t.Errorf("the month cell does not show the folded $15.00:\n%s", body)
 	}
+	if !strings.Contains(body, `<span class="amount">$5.00</span>`) {
+		t.Errorf("the audit trail does not show the raw $5.00 event:\n%s", body)
+	}
 }
 
 // TestEntry_ActionsFold covers the two actions doing what the log says they

@@ -216,13 +216,9 @@ templ auditTrail(p Panel) {
 						</div>
 						<p class="audit-summary">
 							<strong>{ string(event.Action) }</strong>
-							{" "}
-							{ event.Type }
-							{" "}
+							<span>{ event.Type }</span>
 							<span class="direction">{ string(event.Direction) }</span>
-							{" "}
-							for
-							{" "}
+							<span>for</span>
 							<span class="amount">{ event.Amount.Display() }</span>
 						</p>
 						if event.Note != "" {
