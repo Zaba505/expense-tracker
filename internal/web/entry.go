@@ -86,11 +86,13 @@ func handleEntry(logger *slog.Logger, log eventlog.EventStore) http.HandlerFunc 
 // here can talk it into accepting one it would otherwise refuse.
 func parseEntry(values url.Values) (domain.Event, view.Form) {
 	form := view.Form{
-		Month:     view.Field{Value: strings.TrimSpace(values.Get("month"))},
-		Type:      view.Field{Value: strings.TrimSpace(values.Get("type"))},
-		Amount:    view.Field{Value: strings.TrimSpace(values.Get("amount"))},
-		Direction: view.Field{Value: strings.TrimSpace(values.Get("direction"))},
-		Action:    view.Field{Value: strings.TrimSpace(values.Get("action"))},
+		Month:      view.Field{Value: strings.TrimSpace(values.Get("month"))},
+		Type:       view.Field{Value: strings.TrimSpace(values.Get("type"))},
+		Amount:     view.Field{Value: strings.TrimSpace(values.Get("amount"))},
+		Direction:  view.Field{Value: strings.TrimSpace(values.Get("direction"))},
+		Action:     view.Field{Value: strings.TrimSpace(values.Get("action"))},
+		Note:       view.Field{Value: strings.TrimSpace(values.Get("note"))},
+		RefEventID: view.Field{Value: strings.TrimSpace(values.Get("refEventId"))},
 	}
 
 	// The two fields with defaults. A submission that omits them is not
@@ -145,11 +147,13 @@ func parseEntry(values url.Values) (domain.Event, view.Form) {
 	// replayed history keeps the order it happened in; an entry made now is
 	// happening now, and the log's clock is the honest one to ask.
 	return domain.Event{
-		Action:    action,
-		Month:     form.Month.Value,
-		Type:      form.Type.Value,
-		Amount:    amount,
-		Direction: direction,
+		Action:     action,
+		Month:      form.Month.Value,
+		Type:       form.Type.Value,
+		Amount:     amount,
+		Direction:  direction,
+		Note:       form.Note.Value,
+		RefEventID: form.RefEventID.Value,
 	}, form
 }
 

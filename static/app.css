@@ -260,3 +260,54 @@ a {
 .rollup .net dd {
   font-weight: 700;
 }
+
+/* The month's raw event history, including corrections. */
+
+.audit {
+  margin-top: 1.5rem;
+}
+
+.audit h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.audit-trail {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.audit-event {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.audit-head,
+.audit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.audit-head {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.audit-summary {
+  margin: 0.5rem 0 0;
+}
+
+.audit-event .muted {
+  margin: 0.35rem 0 0;
+}
+
+.audit-void {
+  margin: 0;
+}

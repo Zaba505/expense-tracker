@@ -49,6 +49,7 @@ func loadPanel(ctx context.Context, log eventlog.EventStore, month string, form 
 	panel := view.Panel{
 		Month:      month,
 		Rows:       rowsFor(state, month),
+		Events:     eventsFor(events, month),
 		KnownTypes: projection.KnownTypes(events),
 		Form:       form,
 	}
@@ -114,6 +115,16 @@ func rowsFor(state projection.State, month string) []view.Row {
 		)
 	})
 	return rows
+}
+
+func eventsFor(events []domain.Event, month string) []domain.Event {
+	var filtered []domain.Event
+	for _, event := range events {
+		if event.Month == month {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 // renderPanel writes the panel as the whole response body, at the given status:

@@ -1,6 +1,9 @@
 package view
 
 import (
+	"net/url"
+	"time"
+
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/money"
 	"github.com/Zaba505/expense-tracker/internal/projection"
@@ -49,6 +52,9 @@ type Panel struct {
 	// than Month: last January's "Insurance" is worth suggesting in July.
 	KnownTypes []projection.KnownType
 
+	// Events is the month's audit trail, in the log's order.
+	Events []domain.Event
+
 	// Form is the entry form's state — what is typed in it, and what was
 	// wrong with it.
 	Form Form
@@ -82,11 +88,13 @@ type Field struct {
 // Form is the state of the entry form: its five inputs, each carrying the
 // value it shows and the message under it, if any.
 type Form struct {
-	Month     Field
-	Type      Field
-	Amount    Field
-	Direction Field
-	Action    Field
+	Month      Field
+	Type       Field
+	Amount     Field
+	Direction  Field
+	Action     Field
+	Note       Field
+	RefEventID Field
 }
 
 // NewForm is the empty form for a month: expense, add, nothing typed yet.
@@ -121,7 +129,7 @@ func (f Form) Cleared() Form {
 // Rejected reports whether any field carries a message, which is to say
 // whether the submission was refused and nothing was appended.
 func (f Form) Rejected() bool {
-	for _, field := range []Field{f.Month, f.Type, f.Amount, f.Direction, f.Action} {
+	for _, field := range []Field{f.Month, f.Type, f.Amount, f.Direction, f.Action, f.Note, f.RefEventID} {
 		if field.Error != "" {
 			return true
 		}
@@ -137,3 +145,37 @@ func (f Form) Rejected() bool {
 func (f Form) DirectionIs(d domain.Direction) bool { return f.Direction.Value == string(d) }
 
 func (f Form) ActionIs(a domain.Action) bool { return f.Action.Value == string(a) }
+
+// CorrectionPath is the month-view link that pre-fills the form to append a
+// compensating event against e.
+func (p Panel) CorrectionPath(e domain.Event) string {
+	query := url.Values{
+		"type":       {e.Type},
+		"direction":  {string(e.Direction)},
+		"action":     {string(e.Action)},
+		"refEventId": {e.ID},
+	}
+	return "/month/" + p.Month + "?" + query.Encode()
+}
+
+// CorrectionLabel is the action the month view offers for e: adds are adjusted,
+// sets are overridden.
+func CorrectionLabel(e domain.Event) string {
+	if e.Action == domain.ActionSet {
+		return "Override"
+	}
+	return "Adjust"
+}
+
+// CanVoid reports whether e can be walked back with one compensating entry from
+// the month view.
+func CanVoid(e domain.Event) bool { return e.Action == domain.ActionAdd }
+
+// VoidAmount is the amount a compensating add records to retire e.
+func VoidAmount(e domain.Event) string { return (-e.Amount).String() }
+
+// VoidNote is the note the month view stamps onto a one-click void.
+func VoidNote(e domain.Event) string { return "voids " + e.ID }
+
+// RecordedAtDisplay is the audit-trail rendering of one event timestamp.
+func RecordedAtDisplay(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") }

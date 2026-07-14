@@ -61,12 +61,14 @@ func postEntry(t *testing.T, h http.Handler, form url.Values) *httptest.Response
 
 // seed appends an event straight to the log, standing in for entries made
 // before the one under test.
-func seed(t *testing.T, store *stubStore, e domain.Event) {
+func seed(t *testing.T, store *stubStore, e domain.Event) domain.Event {
 	t.Helper()
 
-	if _, err := store.Append(context.Background(), e); err != nil {
+	stored, err := store.Append(context.Background(), e)
+	if err != nil {
 		t.Fatalf("seeding the log with %+v: %v", e, err)
 	}
+	return stored
 }
 
 // logged is everything the log holds, in the log's order.
@@ -166,8 +168,8 @@ func TestEntry_AnswersWithTheFoldedMonth(t *testing.T) {
 	if !strings.Contains(body, "$15.00") {
 		t.Errorf("the panel does not show the folded $15.00:\n%s", body)
 	}
-	if strings.Contains(body, "$5.00") {
-		t.Errorf("the panel shows the raw $5.00 that was submitted, not the folded total:\n%s", body)
+	if !strings.Contains(body, `<td class="amount">$15.00</td>`) {
+		t.Errorf("the month cell does not show the folded $15.00:\n%s", body)
 	}
 }
 
@@ -216,6 +218,94 @@ func TestEntry_ActionsFold(t *testing.T) {
 				t.Errorf("after a %q of %s over $10.00, the panel does not show %s:\n%s", test.action, test.amount, test.want, body)
 			}
 		})
+	}
+}
+
+func TestEntry_AdjustmentAppendsACompensatingEvent(t *testing.T) {
+	t.Parallel()
+
+	handler, store := ownerHandler(t)
+	original := seed(t, store, domain.Event{
+		Action: domain.ActionAdd, Month: testMonth, Type: "Groceries",
+		Amount: money.Cents(12_00), Direction: domain.DirectionExpense,
+	})
+
+	form := entry()
+	form.Set("amount", "-2.00")
+	form.Set("note", "coupon was entered later")
+	form.Set("refEventId", original.ID)
+	rec := postEntry(t, handler, form)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST %s status = %d, want %d\n%s", view.EntriesPath, rec.Code, http.StatusOK, rec.Body)
+	}
+
+	events := logged(t, store)
+	if len(events) != 2 {
+		t.Fatalf("the log holds %d events, want 2", len(events))
+	}
+	if got := events[0]; got.ID != original.ID || got.Amount != original.Amount {
+		t.Fatalf("the original event changed from %+v to %+v", original, got)
+	}
+
+	got := events[1]
+	if got.Action != domain.ActionAdd || got.Amount != money.Cents(-2_00) || got.RefEventID != original.ID || got.Note != "coupon was entered later" {
+		t.Errorf("the correction event is %+v, want an adjusting add against %s", got, original.ID)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"$10.00",
+		original.ID,
+		"coupon was entered later",
+		"Corrects " + original.ID,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the corrected panel does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestEntry_SetOverrideAppendsACompensatingEvent(t *testing.T) {
+	t.Parallel()
+
+	handler, store := ownerHandler(t)
+	original := seed(t, store, domain.Event{
+		Action: domain.ActionSet, Month: testMonth, Type: "Rent",
+		Amount: money.Cents(1500_00), Direction: domain.DirectionExpense,
+	})
+
+	form := entry()
+	form.Set("type", "Rent")
+	form.Set("action", string(domain.ActionSet))
+	form.Set("amount", "1200.00")
+	form.Set("note", "typed an extra zero")
+	form.Set("refEventId", original.ID)
+	rec := postEntry(t, handler, form)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST %s status = %d, want %d\n%s", view.EntriesPath, rec.Code, http.StatusOK, rec.Body)
+	}
+
+	events := logged(t, store)
+	if len(events) != 2 {
+		t.Fatalf("the log holds %d events, want 2", len(events))
+	}
+	got := events[1]
+	if got.Action != domain.ActionSet || got.Amount != money.Cents(1200_00) || got.RefEventID != original.ID || got.Note != "typed an extra zero" {
+		t.Errorf("the override event is %+v, want a set against %s", got, original.ID)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"$1,200.00",
+		original.ID,
+		"typed an extra zero",
+		"Corrects " + original.ID,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the corrected panel does not contain %q:\n%s", want, body)
+		}
 	}
 }
 
@@ -446,6 +536,8 @@ func TestEntry_SuccessClearsTheFieldsThatChange(t *testing.T) {
 	form.Set("type", "Mortgage")
 	form.Set("amount", "1500.00")
 	form.Set("action", string(domain.ActionSet))
+	form.Set("note", "copied from the statement")
+	form.Set("refEventId", "evt-42")
 	rec := postEntry(t, handler, form)
 
 	body := rec.Body.String()
@@ -463,6 +555,12 @@ func TestEntry_SuccessClearsTheFieldsThatChange(t *testing.T) {
 	}
 	if !strings.Contains(body, `value="`+string(domain.ActionSet)+`" selected`) {
 		t.Errorf("the action was reset; the next entry in a run is usually the same kind:\n%s", body)
+	}
+	if strings.Contains(body, `name="note" value="copied from the statement"`) {
+		t.Errorf("the note is still in the form after being recorded:\n%s", body)
+	}
+	if strings.Contains(body, `name="refEventId" value="evt-42"`) {
+		t.Errorf("the refEventId is still in the form after being recorded:\n%s", body)
 	}
 }
 
