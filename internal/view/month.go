@@ -2,7 +2,6 @@ package view
 
 import (
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/Zaba505/expense-tracker/internal/domain"
@@ -199,7 +198,21 @@ func CorrectionLabel(e domain.Event) string {
 
 // CanVoid reports whether e can be walked back with one compensating entry from
 // the month view.
+//
+// A rename is not one of them. Voiding is a compensating add — an equal and
+// opposite amount — and a rename moves no amount to oppose. What walks a rename
+// back is another rename, the other way round, which is a thing the rename form
+// can already record.
 func CanVoid(e domain.Event) bool { return e.Action == domain.ActionAdd }
+
+// Plural picks the word for a count, so the templates can say "1 entry" and
+// "2 entries" without an if/else around every number they render.
+func Plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
 
 // VoidAmount is the amount a compensating add records to retire e.
 func VoidAmount(e domain.Event) string { return (-e.Amount).String() }
@@ -225,5 +238,3 @@ func shiftMonth(month string, by int) string {
 	}
 	return domain.Month(t.AddDate(0, by, 0))
 }
-
-func FormatCount(n int) string { return strconv.Itoa(n) }

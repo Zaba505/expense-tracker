@@ -1,6 +1,7 @@
 package projection_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 
 func TestKnownTypes(t *testing.T) {
 	t.Run("returns distinct types with their last used month, newest first", func(t *testing.T) {
-		got := projection.KnownTypes([]domain.Event{
+		got := knownTypes(t, []domain.Event{
 			eventAt(domain.ActionSet, "2026-01", "Rent", 180_000, time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionAdd, "2026-02", "Groceries", 8_400, time.Date(2026, 2, 5, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionAdd, "2026-03", "Groceries", 9_100, time.Date(2026, 3, 5, 9, 0, 0, 0, time.UTC)),
@@ -28,7 +29,7 @@ func TestKnownTypes(t *testing.T) {
 	})
 
 	t.Run("includes types retired months ago", func(t *testing.T) {
-		got := projection.KnownTypes([]domain.Event{
+		got := knownTypes(t, []domain.Event{
 			eventAt(domain.ActionSet, "2025-11", "Renters Insurance", 12_000, time.Date(2025, 11, 2, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionSet, "2026-05", "Mortgage", 210_000, time.Date(2026, 5, 2, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionAdd, "2026-06", "Groceries", 8_400, time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)),
@@ -43,7 +44,7 @@ func TestKnownTypes(t *testing.T) {
 	})
 
 	t.Run("a new type appears immediately after its first event, even for an older month", func(t *testing.T) {
-		got := projection.KnownTypes([]domain.Event{
+		got := knownTypes(t, []domain.Event{
 			eventAt(domain.ActionAdd, "2026-07", "Groceries", 8_400, time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionSet, "2026-06", "Rent", 180_000, time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionAdd, "2024-12", "Travel", 50_000, time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC)),
@@ -58,7 +59,7 @@ func TestKnownTypes(t *testing.T) {
 	})
 
 	t.Run("normalizes types before deduplicating them", func(t *testing.T) {
-		got := projection.KnownTypes([]domain.Event{
+		got := knownTypes(t, []domain.Event{
 			eventAt(domain.ActionAdd, "2026-07", "Groceries", 8_400, time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionAdd, "2026-08", "  Groceries  ", 9_100, time.Date(2026, 7, 11, 9, 0, 0, 0, time.UTC)),
 		})
@@ -70,17 +71,10 @@ func TestKnownTypes(t *testing.T) {
 	})
 
 	t.Run("a rename or merge removes the old type from the list across history", func(t *testing.T) {
-		got := projection.KnownTypes([]domain.Event{
+		got := knownTypes(t, []domain.Event{
 			eventAt(domain.ActionAdd, "2026-01", "Fuel", 8_400, time.Date(2026, 1, 10, 9, 0, 0, 0, time.UTC)),
 			eventAt(domain.ActionAdd, "2026-02", "Gas", 9_100, time.Date(2026, 2, 10, 9, 0, 0, 0, time.UTC)),
-			{
-				Action:     domain.ActionRenameType,
-				Month:      "2026-07",
-				Type:       "Fuel",
-				ToType:     "Gas",
-				Direction:  domain.DirectionExpense,
-				RecordedAt: time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC),
-			},
+			renameAt("Fuel", "Gas", time.Date(2026, 7, 12, 9, 0, 0, 0, time.UTC)),
 		})
 
 		want := []projection.KnownType{
@@ -88,6 +82,65 @@ func TestKnownTypes(t *testing.T) {
 		}
 		assertKnownTypes(t, got, want)
 	})
+
+	t.Run("a name used again after it was renamed away is a type of its own", func(t *testing.T) {
+		// The rename retired "Fuel" for the history behind it, not for the
+		// name itself: the type field still accepts it, and an entry that uses
+		// it is a new type rather than more of the one it was renamed to.
+		got := knownTypes(t, []domain.Event{
+			eventAt(domain.ActionAdd, "2026-01", "Fuel", 8_400, time.Date(2026, 1, 10, 9, 0, 0, 0, time.UTC)),
+			renameAt("Fuel", "Gas", time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)),
+			eventAt(domain.ActionAdd, "2026-03", "Fuel", 1_100, time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC)),
+		})
+
+		want := []projection.KnownType{
+			{Type: "Fuel", LastUsedMonth: "2026-03"},
+			{Type: "Gas", LastUsedMonth: "2026-01"},
+		}
+		assertKnownTypes(t, got, want)
+	})
+
+	t.Run("an event no fold can replay is an error, not an empty list", func(t *testing.T) {
+		// The autocomplete is not the place to discover that the log is
+		// broken, but it is not the place to hide it either: an empty list
+		// reads exactly like a log with nothing in it.
+		_, err := projection.KnownTypes([]domain.Event{
+			{
+				Action:     domain.ActionAdd,
+				Month:      "2026-01",
+				Type:       "Groceries",
+				Amount:     money.Cents(8_400),
+				Direction:  domain.Direction("sideways"),
+				RecordedAt: time.Date(2026, 1, 10, 9, 0, 0, 0, time.UTC),
+			},
+		})
+		if !errors.Is(err, projection.ErrUnknownDirection) {
+			t.Errorf("KnownTypes() error = %v, want %v", err, projection.ErrUnknownDirection)
+		}
+	})
+}
+
+// knownTypes is KnownTypes for the tests that pass it a log it can read.
+func knownTypes(t *testing.T, events []domain.Event) []projection.KnownType {
+	t.Helper()
+
+	known, err := projection.KnownTypes(events)
+	if err != nil {
+		t.Fatalf("KnownTypes() error = %v", err)
+	}
+	return known
+}
+
+// renameAt is the event that renames one type into another across the history
+// behind it.
+func renameAt(from, to string, recordedAt time.Time) domain.Event {
+	return domain.Event{
+		Action:     domain.ActionRenameType,
+		Month:      domain.Month(recordedAt),
+		Type:       from,
+		ToType:     to,
+		RecordedAt: recordedAt,
+	}
 }
 
 func eventAt(action domain.Action, month, typ string, amount int64, recordedAt time.Time) domain.Event {

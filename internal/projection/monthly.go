@@ -2,6 +2,7 @@ package projection
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/money"
@@ -106,14 +107,28 @@ func keyOf(e domain.Event) Key {
 // the events that can carry a direction nothing has vetted, and State is only
 // as trustworthy as the keys it is built from.
 func Fold(events []domain.Event) (State, error) {
-	state := make(State)
-	canonical, _, err := canonicalizeHistory(events)
+	canonical, err := canonicalize(events)
 	if err != nil {
 		return nil, err
 	}
+	return foldCanonical(canonical)
+}
+
+// foldCanonical folds the add and set events canonicalize has already vetted.
+//
+// It re-checks the action against the handlers even though canonicalize only
+// ever emits actions they cover, because the alternative is to trust the two to
+// agree: an action added to canonicalize and forgotten here would be a nil
+// handler called on the next fold — a panic where this package promises an
+// ErrUnknownAction naming the event.
+func foldCanonical(canonical []domain.Event) (State, error) {
+	state := make(State)
 
 	for _, e := range canonical {
-		handle := handlers[e.Action]
+		handle, ok := handlers[e.Action]
+		if !ok {
+			return nil, fmt.Errorf("%w: %q", ErrUnknownAction, e.Action)
+		}
 		handle(state, e)
 	}
 

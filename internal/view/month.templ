@@ -1,6 +1,8 @@
 package view
 
 import (
+	"strconv"
+
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/projection"
 )
@@ -230,45 +232,71 @@ templ typeRenameForm(p Panel) {
 			<button class="button" type="submit" name="intent" value="preview">Preview rename</button>
 		</div>
 		<div class="field field-submit">
-			<button class="button" type="submit" name="intent" value="apply">Apply rename</button>
+			// Disabled on a conflict so the button cannot promise what the
+			// handler would refuse. The handler refuses it regardless — this
+			// is the courtesy, not the check.
+			<button
+				class="button"
+				type="submit"
+				name="intent"
+				value="apply"
+				disabled?={ p.TypeRenamePreview.Conflicts }
+			>Apply rename</button>
 		</div>
 	</form>
-	if p.TypeRenamePreview.AffectedEntries > 0 {
-		<section class="audit">
+	if len(p.TypeRenamePreview.Cells) > 0 {
+		<section class="rename-preview">
 			<h3>Rename preview</h3>
 			<p>
 				<strong>{ p.TypeRenamePreview.FromType }</strong>
-				<span>will become</span>
+				<span>will be read as</span>
 				<strong>{ p.TypeRenamePreview.ToType }</strong>
 				<span>in</span>
-				<strong>{ FormatCount(len(p.TypeRenamePreview.Months)) }</strong>
-				if len(p.TypeRenamePreview.Months) == 1 {
-					<span>month</span>
-				} else {
-					<span>months</span>
-				}
+				<strong>{ strconv.Itoa(p.TypeRenamePreview.Months()) }</strong>
+				<span>{ Plural(p.TypeRenamePreview.Months(), "month", "months") }</span>
 				<span>across</span>
-				<strong>{ FormatCount(p.TypeRenamePreview.AffectedEntries) }</strong>
-				if p.TypeRenamePreview.AffectedEntries == 1 {
-					<span>entry.</span>
-				} else {
-					<span>entries.</span>
-				}
+				<strong>{ strconv.Itoa(p.TypeRenamePreview.AffectedEntries) }</strong>
+				<span>{ Plural(p.TypeRenamePreview.AffectedEntries, "entry", "entries") }.</span>
 			</p>
-			<ul class="audit-trail">
-				for _, month := range p.TypeRenamePreview.Months {
-					<li class="audit-event">
-						<strong>{ month.Month }</strong>
-						<span>
-							if month.Entries == 1 {
-								{ " — 1 entry" }
-							} else {
-								{ " — " + FormatCount(month.Entries) + " entries" }
-							}
-						</span>
-					</li>
-				}
-			</ul>
+			<table class="cells">
+				<thead>
+					<tr>
+						<th scope="col">Month</th>
+						<th scope="col">Direction</th>
+						<th scope="col">Entries</th>
+						<th scope="col">{ p.TypeRenamePreview.FromType }</th>
+						<th scope="col">{ p.TypeRenamePreview.ToType }</th>
+						<th scope="col">Becomes</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, cell := range p.TypeRenamePreview.Cells {
+						<tr>
+							<td>{ cell.Month }</td>
+							<td class="direction">{ string(cell.Direction) }</td>
+							<td>{ strconv.Itoa(cell.Entries) }</td>
+							<td class="amount">{ cell.From.Display() }</td>
+							<td class="amount">{ cell.To.Display() }</td>
+							<td class="amount">
+								{ cell.Result.Display() }
+								if cell.Conflict() {
+									<strong class="conflict">conflict</strong>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			if p.TypeRenamePreview.Conflicts {
+				<p class="conflict" role="alert">
+					Both types already have a total set in a month marked
+					above, and a set replaces rather than adds — so merging
+					them would keep only the later total and drop the other.
+					Record the combined total under
+					<strong>{ p.TypeRenamePreview.ToType }</strong>
+					first, then rename.
+				</p>
+			}
 		</section>
 	}
 }

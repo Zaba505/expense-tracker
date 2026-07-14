@@ -14,6 +14,17 @@ import (
 	"github.com/Zaba505/expense-tracker/internal/view"
 )
 
+// handleTypeRename previews a retroactive rename or merge, and records it.
+//
+// Both intents run the same preview, because the preview is not a courtesy —
+// it is the check. A merge can destroy money (see
+// projection.TypeRenameCell.Conflict), so the preview is what decides whether
+// there is a rename to append at all, and "apply" is refused on the same
+// grounds "preview" would have warned about. A user who never pressed Preview
+// is therefore no more able to lose a month's total than one who did.
+//
+// The reply is the panel either way, at 200 when the rename was appended or
+// merely previewed, and 422 when it was refused.
 func handleTypeRename(logger *slog.Logger, log eventlog.EventStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -55,22 +66,23 @@ func handleTypeRename(logger *slog.Logger, log eventlog.EventStore) http.Handler
 			return
 		}
 
+		// What the preview found, said as the form's own refusals. Empty fields
+		// are already caught above, so what is left is what only the log knows:
+		// a type it has nothing to rename, and a merge it cannot make without
+		// losing money.
 		switch {
-		case preview.FromType == "":
-			form.FromType.Error = "Choose the type to rename."
-		case preview.ToType == "":
-			form.ToType.Error = "Name the type it should become."
 		case preview.FromType == preview.ToType:
 			form.ToType.Error = "Pick a different target type."
 		case preview.AffectedEntries == 0:
-			form.FromType.Error = "That type has no history left to rename."
+			form.FromType.Error = "The log has nothing recorded under that type."
+		case preview.Conflicts:
+			form.FromType.Error = "Both types already have a total set in the same month, so merging them would drop one. Set the combined total first, then rename."
 		}
 
-		if form.Rejected() || intent == "preview" || intent == "" {
+		if form.Rejected() || intent != intentApply {
 			status := http.StatusOK
 			if form.Rejected() {
 				status = http.StatusUnprocessableEntity
-				preview = projection.TypeRenamePreview{}
 			}
 
 			panel, err := panelFromState(events, state, month, view.NewForm(month))
@@ -83,17 +95,20 @@ func handleTypeRename(logger *slog.Logger, log eventlog.EventStore) http.Handler
 				return
 			}
 			panel.TypeRenameForm = form
+
+			// The preview is rendered with the refusal rather than instead of
+			// it: a conflict is only actionable if the owner can see the months
+			// it is about.
 			panel.TypeRenamePreview = preview
 			renderPanel(w, r, logger, panel, status)
 			return
 		}
 
 		stored, err := log.Append(r.Context(), domain.Event{
-			Action:    domain.ActionRenameType,
-			Month:     month,
-			Type:      preview.FromType,
-			ToType:    preview.ToType,
-			Direction: domain.DirectionExpense,
+			Action: domain.ActionRenameType,
+			Month:  month,
+			Type:   preview.FromType,
+			ToType: preview.ToType,
 		})
 		if err != nil {
 			logger.ErrorContext(r.Context(), "appending a type rename",
@@ -112,6 +127,12 @@ func handleTypeRename(logger *slog.Logger, log eventlog.EventStore) http.Handler
 	}
 }
 
+// intentApply is the submit button that records the rename. Anything else —
+// the Preview button, or a submission with no button at all — only previews,
+// because the safe reading of an unrecognized intent is the one that appends
+// nothing to a log that cannot take it back.
+const intentApply = "apply"
+
 func parseTypeRename(values url.Values) (view.TypeRenameForm, string) {
 	form := view.TypeRenameForm{
 		FromType: view.Field{Value: strings.TrimSpace(values.Get("fromType"))},
@@ -128,6 +149,10 @@ func parseTypeRename(values url.Values) (view.TypeRenameForm, string) {
 	return form, strings.TrimSpace(values.Get("intent"))
 }
 
+// typeRenameMonth is the month to fold behind the form, on the same terms as
+// panelMonth: the one submitted when it is a month at all, and otherwise the
+// current one. It is only the month the panel renders — a rename reaches every
+// month regardless of which one it was recorded from.
 func typeRenameMonth(values url.Values) string {
 	month := strings.TrimSpace(values.Get("month"))
 	if domain.ValidMonth(month) {

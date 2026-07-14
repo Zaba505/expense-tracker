@@ -29,9 +29,18 @@ const (
 	// than a transaction.
 	ActionSet Action = "set"
 
-	// ActionRenameType retroactively rewrites one type's name everywhere in
-	// history, without editing the events already in the log. It is what a
-	// typo cleanup or a merge of synonyms records.
+	// ActionRenameType reads one type's name as another everywhere in the
+	// history behind it, without editing the events already in the log. It is
+	// what a typo cleanup or a merge of synonyms records.
+	//
+	// It renames the past, not the future: an entry recorded after the rename
+	// under the old name is a new type of that name, not more of the type it
+	// was renamed to. That is what keeps a name reusable and a rename
+	// reversible — renaming it back is just another rename.
+	//
+	// Type is the name being renamed and ToType is what it becomes. Amount is
+	// meaningless on one and must be zero; nothing reads Direction or Month
+	// either, though the log keeps the month the owner recorded it from.
 	ActionRenameType Action = "rename_type"
 )
 
@@ -197,6 +206,14 @@ func (e Event) Validate() error {
 		}
 		if e.Type == e.ToType {
 			return fmt.Errorf("%w: type %q and toType %q are the same", ErrInvalidEvent, e.Type, e.ToType)
+		}
+		// A rename moves no money — it only changes the name history is read
+		// under — so an amount on one is a mistake about what the event does.
+		// Refused rather than ignored: no projection would ever spend it, and
+		// an amount silently dropped by the fold is money the owner believes
+		// they recorded.
+		if e.Amount != 0 {
+			return fmt.Errorf("%w: a rename carries no amount, got %s", ErrInvalidEvent, e.Amount)
 		}
 	}
 	if !e.Direction.Valid() {

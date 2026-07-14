@@ -180,6 +180,12 @@ func TestEvent_Validate(t *testing.T) {
 				e.Action = domain.ActionRenameType
 				e.ToType = e.Type
 			},
+			"a type rename carrying an amount": func(e *domain.Event) {
+				// A rename moves no money. An amount on one is a mistake about
+				// what the event does, and no projection would ever spend it.
+				e.Action = domain.ActionRenameType
+				e.ToType = "Food"
+			},
 			"a type that is only whitespace": func(e *domain.Event) {
 				// Normalize trims it to empty; Validate is what refuses it.
 				*e = domain.Event{
