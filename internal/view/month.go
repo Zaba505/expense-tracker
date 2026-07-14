@@ -194,7 +194,7 @@ func NextMonth(month string) string { return shiftMonth(month, 1) }
 func shiftMonth(month string, by int) string {
 	t, err := time.Parse("2006-01", month)
 	if err != nil {
-		panic("view.shiftMonth: invalid month " + month)
+		panic("view.shiftMonth: invalid month " + month + ": " + err.Error())
 	}
 	return domain.Month(t.AddDate(0, by, 0))
 }
