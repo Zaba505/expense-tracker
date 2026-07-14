@@ -45,11 +45,16 @@ func panelFromState(events []domain.Event, state projection.State, month string,
 		return view.Panel{}, fmt.Errorf("rolling up the log: %w", err)
 	}
 
+	known, err := projection.KnownTypes(events)
+	if err != nil {
+		return view.Panel{}, fmt.Errorf("reading the log's types: %w", err)
+	}
+
 	panel := view.Panel{
 		Month:      month,
 		Rows:       rowsFor(state, month),
 		Events:     eventsFor(events, month),
-		KnownTypes: projection.KnownTypes(events),
+		KnownTypes: known,
 		Form:       form,
 	}
 
@@ -131,10 +136,19 @@ func rowsFor(state projection.State, month string) []view.Row {
 	return rows
 }
 
+// eventsFor is the month's audit trail: the events recorded against it, plus
+// every rename in the log.
+//
+// The renames are in every month's trail because that is where their effect is.
+// A rename carries the month the owner happened to be looking at when they
+// recorded it, but it reaches all of history — so a January row that reads
+// "Gas" because a rename in July said so is only explicable from January if the
+// rename is visible from January. Filing it under July alone would leave the
+// one month whose rows actually changed with no record of what changed them.
 func eventsFor(events []domain.Event, month string) []domain.Event {
 	var filtered []domain.Event
 	for _, event := range events {
-		if event.Month == month {
+		if event.Month == month || event.Action == domain.ActionRenameType {
 			filtered = append(filtered, event)
 		}
 	}

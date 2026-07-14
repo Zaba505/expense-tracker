@@ -210,6 +210,7 @@ type eventDoc struct {
 	Action      string    `firestore:"action"`
 	Month       string    `firestore:"month"`
 	Type        string    `firestore:"type"`
+	ToType      string    `firestore:"to_type"`
 	AmountCents int64     `firestore:"amount_cents"`
 	Direction   string    `firestore:"direction"`
 	Note        string    `firestore:"note"`
@@ -227,6 +228,7 @@ func newEventDoc(e domain.Event) eventDoc {
 		Action:      string(e.Action),
 		Month:       e.Month,
 		Type:        e.Type,
+		ToType:      e.ToType,
 		AmountCents: int64(e.Amount),
 		Direction:   string(e.Direction),
 		Note:        e.Note,
@@ -276,6 +278,7 @@ func decodeEvent(snap *firestore.DocumentSnapshot) (domain.Event, error) {
 		Action:     domain.Action(doc.Action),
 		Month:      doc.Month,
 		Type:       doc.Type,
+		ToType:     doc.ToType,
 		Amount:     money.Cents(doc.AmountCents),
 		Direction:  domain.Direction(doc.Direction),
 		Note:       doc.Note,

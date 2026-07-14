@@ -15,6 +15,10 @@ import (
 // web mounts its handler on this same constant.
 const EntriesPath = "/entries"
 
+// TypeRenamesPath is where the type-rename form previews and records a rename
+// or merge across history.
+const TypeRenamesPath = "/type-renames"
+
 // MonthJumpPath is the GET endpoint the month jump control submits to.
 const MonthJumpPath = "/month"
 
@@ -61,6 +65,12 @@ type Panel struct {
 	// Form is the entry form's state — what is typed in it, and what was
 	// wrong with it.
 	Form Form
+
+	// TypeRenameForm is the retroactive rename/merge form's state.
+	TypeRenameForm TypeRenameForm
+
+	// TypeRenamePreview is the currently rendered rename impact preview, if any.
+	TypeRenamePreview projection.TypeRenamePreview
 }
 
 // Row is one folded cell: what a type came to in this month, in one
@@ -98,6 +108,12 @@ type Form struct {
 	Action     Field
 	Note       Field
 	RefEventID Field
+}
+
+// TypeRenameForm is the state of the retroactive rename/merge form.
+type TypeRenameForm struct {
+	FromType Field
+	ToType   Field
 }
 
 // NewForm is the empty form for a month: expense, add, nothing typed yet.
@@ -140,6 +156,16 @@ func (f Form) Rejected() bool {
 	return false
 }
 
+// Rejected reports whether either type-rename field carries a message.
+func (f TypeRenameForm) Rejected() bool {
+	for _, field := range []Field{f.FromType, f.ToType} {
+		if field.Error != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // DirectionIs and ActionIs report whether the form currently holds the given
 // choice, which is what decides the checked radio and the selected option.
 // They compare against the domain's constants rather than against string
@@ -172,7 +198,21 @@ func CorrectionLabel(e domain.Event) string {
 
 // CanVoid reports whether e can be walked back with one compensating entry from
 // the month view.
+//
+// A rename is not one of them. Voiding is a compensating add — an equal and
+// opposite amount — and a rename moves no amount to oppose. What walks a rename
+// back is another rename, the other way round, which is a thing the rename form
+// can already record.
 func CanVoid(e domain.Event) bool { return e.Action == domain.ActionAdd }
+
+// Plural picks the word for a count, so the templates can say "1 entry" and
+// "2 entries" without an if/else around every number they render.
+func Plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
 
 // VoidAmount is the amount a compensating add records to retire e.
 func VoidAmount(e domain.Event) string { return (-e.Amount).String() }

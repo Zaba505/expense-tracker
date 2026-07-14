@@ -349,3 +349,33 @@ a {
   border-top: 2px solid var(--border);
   font-weight: 700;
 }
+
+/* The rename preview: what a retroactive rename would do to the cells it
+   moves, and the conflict that stops it from being applied. */
+
+.rename-preview {
+  margin-top: 1.5rem;
+}
+
+.rename-preview h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.rename-preview p {
+  margin: 0 0 0.75rem;
+}
+
+.rename-preview p.conflict {
+  margin: 0.75rem 0 0;
+}
+
+.conflict {
+  color: var(--danger);
+}
+
+.button[disabled] {
+  background: var(--muted);
+  border-color: var(--muted);
+  cursor: not-allowed;
+}
