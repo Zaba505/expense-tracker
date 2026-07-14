@@ -42,6 +42,7 @@ func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 	// page a catch-all and swallow every 404.
 	mux.Handle("GET /{$}", handleHome(logger, store, authn))
 	mux.Handle("GET /month/{month}", handleMonth(logger, store, authn))
+	mux.Handle("GET /reports/{year}", handleReport(logger, store, authn))
 
 	// The entry form's hx-post uses view.EntriesPath, so this route is mounted
 	// on that same shared constant and cannot drift from the markup.
