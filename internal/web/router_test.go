@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/Zaba505/expense-tracker/internal/auth"
+	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/eventlog"
+	"github.com/Zaba505/expense-tracker/internal/money"
 )
 
 // testOwnerEmail is the configured allowlisted account in router tests.
@@ -225,6 +227,92 @@ func TestHome_OwnerSession(t *testing.T) {
 	}
 	if got := rec.Body.String(); !strings.Contains(got, "<!doctype html>") {
 		t.Errorf("GET / body is not an HTML document:\n%s", got)
+	}
+}
+
+func TestMonthView_RendersTheRequestedProjection(t *testing.T) {
+	t.Parallel()
+
+	store := newStubStore()
+	for _, event := range []domain.Event{
+		{Action: domain.ActionAdd, Month: "2026-06", Type: "Groceries", Amount: money.Cents(20_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-07", Type: "Groceries", Amount: money.Cents(10_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-07", Type: "Rent", Amount: money.Cents(55_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-07", Type: "Paycheck", Amount: money.Cents(100_00), Direction: domain.DirectionIncome},
+		{Action: domain.ActionAdd, Month: "2026-08", Type: "Groceries", Amount: money.Cents(30_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-08", Type: "Rent", Amount: money.Cents(55_00), Direction: domain.DirectionExpense},
+	} {
+		if _, err := store.Append(t.Context(), event); err != nil {
+			t.Fatalf("seeding the log with %+v: %v", event, err)
+		}
+	}
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, authn), "/month/2026-07")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /month/2026-07 status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"<h2>2026-07</h2>",
+		"Groceries",
+		"Rent",
+		"Paycheck",
+		"$10.00",
+		"$55.00",
+		"$100.00",
+		`<dd class="amount">$65.00</dd>`,
+		`<dd class="amount">$35.00</dd>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /month/2026-07 body does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestMonthView_EmptyMonthRendersAReadyForm(t *testing.T) {
+	t.Parallel()
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/month/2026-10")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /month/2026-10 status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Nothing recorded for 2026-10 yet.",
+		`name="month" value="2026-10"`,
+		`value="expense" checked`,
+		`value="add" selected`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /month/2026-10 body does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestMonthView_RejectsMalformedMonths(t *testing.T) {
+	t.Parallel()
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/month/2026-7")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /month/2026-7 status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
