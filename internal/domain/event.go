@@ -148,6 +148,18 @@ func Month(t time.Time) string {
 	return t.UTC().Format(monthLayout)
 }
 
+// ParseMonth is the inverse of Month: the first instant of the calendar
+// month s names, in UTC. It is the layout's only reader, so a caller that
+// needs the month as a time — the importer, dating a replayed event at the
+// month it belongs to — does not respell "2006-01" and drift from it.
+func ParseMonth(s string) (time.Time, error) {
+	t, err := time.Parse(monthLayout, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: month %q is not a calendar month %q", ErrInvalidEvent, s, monthLayout)
+	}
+	return t, nil
+}
+
 // ValidMonth reports whether s is a calendar month in the layout
 // Event.Month requires: zero-padded, no day, "2026-07".
 //
@@ -159,7 +171,7 @@ func Month(t time.Time) string {
 // not zero-padded ("2026-7") sorts after December and would quietly file
 // itself at the end of the year.
 func ValidMonth(s string) bool {
-	_, err := time.Parse(monthLayout, s)
+	_, err := ParseMonth(s)
 	return err == nil
 }
 

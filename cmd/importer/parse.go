@@ -1,170 +1,202 @@
 package main
 
 import (
-	"encoding/csv"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/money"
 )
 
-var ignoredColumns = map[string]struct{}{
-	"expenses":            {},
-	"monthly bills total": {},
-	"net":                 {},
-	"savings":             {},
-	"total expenditure":   {},
+// row is one row of the importer's input, and one event.
+//
+// The input is Parquet rather than the sheet's CSV export, and it is long
+// rather than wide: the owner's conversion script unpivots the spreadsheet,
+// so a row carries the type it is for and the direction the money moved,
+// instead of the importer having to infer either from a column heading.
+//
+// That is what keeps this file free of a derived-column denylist. A wide
+// sheet forces the importer to decide, for every column it has never seen,
+// whether the number under it is a bill or a formula — and to guess wrong
+// silently, into a log that cannot be edited. Here the script simply does
+// not emit a row for a rollup column, because a rollup is not an event.
+type row struct {
+	Month       string `parquet:"month"`
+	Type        string `parquet:"type"`
+	AmountCents int64  `parquet:"amount_cents"`
+	Direction   string `parquet:"direction"`
 }
 
-var monthLayouts = []string{
-	"2006-01",
-	"2006-01-02",
-	"Jan 2006",
-	"January 2006",
+// inputColumns is the schema the input must have, checked before a single
+// row is decoded.
+//
+// parquet-go will not check it for us, and its defaults are the dangerous
+// ones: a column the file omits decodes as the zero value, and a column
+// whose type is wrong is coerced rather than refused. Three ways that ends
+// badly, none of which a per-row check can catch afterwards:
+//
+//   - No direction column at all decodes as "", which Normalize reads as an
+//     expense — quietly filing every paycheck of the last five years as a bill.
+//   - amount_cents written as a float of dollars (1200.00, the natural thing
+//     for a pandas script to do) truncates into an int64 as 1200. Every amount
+//     lands a hundredfold light, and every one of them is still a plausible
+//     number of cents, so nothing downstream can tell.
+//   - direction written as an int decodes as its digits ("7"), which at least
+//     fails the per-row check — but only by luck.
+//
+// The log is append-only, so each of these is permanent the moment it is
+// appended. The schema is therefore checked, not trusted, and the amount is
+// required to be an integer count of cents — the one representation that
+// cannot quietly lose a factor of a hundred.
+var inputColumns = []struct {
+	name string
+	kind parquet.Kind
+}{
+	{"month", parquet.ByteArray},
+	{"type", parquet.ByteArray},
+	{"amount_cents", parquet.Int64},
+	{"direction", parquet.ByteArray},
 }
 
-// cellError reports which CSV cell could not be translated.
-type cellError struct {
+// rowError reports which input row could not be translated, and which of
+// its columns was at fault.
+type rowError struct {
 	Row    int
-	Column int
-	Header string
+	Column string
 	Err    error
 }
 
-func (e *cellError) Error() string {
-	if e.Header == "" {
-		return fmt.Sprintf("importer: row %d column %d: %v", e.Row, e.Column, e.Err)
-	}
-	return fmt.Sprintf("importer: row %d column %d (%s): %v", e.Row, e.Column, e.Header, e.Err)
+func (e *rowError) Error() string {
+	return fmt.Sprintf("importer: row %d (%s): %v", e.Row, e.Column, e.Err)
 }
 
-func (e *cellError) Unwrap() error { return e.Err }
+func (e *rowError) Unwrap() error { return e.Err }
 
-// parseCSV translates the exported sheet CSV into the import event stream.
-func parseCSV(r io.Reader) ([]domain.Event, error) {
-	rows := csv.NewReader(r)
-	rows.FieldsPerRecord = -1
-	rows.TrimLeadingSpace = true
-
-	header, err := rows.Read()
+// parseParquet translates the converted sheet into the events to import.
+//
+// now is handed in rather than read from the clock so that the clamp in
+// recordedAt is testable, and for the reason internal/domain gives for
+// taking no clock it was not given.
+func parseParquet(r io.ReaderAt, size int64, now time.Time) ([]domain.Event, error) {
+	f, err := parquet.OpenFile(r, size)
 	if err != nil {
-		if err == io.EOF {
-			return nil, fmt.Errorf("importer: empty csv")
-		}
-		return nil, fmt.Errorf("importer: read header: %w", err)
+		return nil, fmt.Errorf("importer: open parquet: %w", err)
 	}
-	for i := range header {
-		header[i] = strings.TrimSpace(header[i])
+	if err := checkSchema(f.Schema()); err != nil {
+		return nil, err
 	}
 
-	monthColumn := -1
-	for i, name := range header {
-		if strings.EqualFold(name, "Month") {
-			monthColumn = i
-			break
-		}
-	}
-	if monthColumn < 0 {
-		return nil, fmt.Errorf("importer: missing Month column")
+	rows, err := parquet.Read[row](r, size)
+	if err != nil {
+		return nil, fmt.Errorf("importer: read parquet: %w", err)
 	}
 
-	monthEventCounts := make(map[string]int)
-	var events []domain.Event
-	for rowNumber := 2; ; rowNumber++ {
-		record, err := rows.Read()
-		if err != nil {
-			if err == io.EOF {
-				return events, nil
-			}
-			return nil, fmt.Errorf("importer: read row %d: %w", rowNumber, err)
-		}
-		if isBlankRecord(record) {
-			continue
+	events := make([]domain.Event, 0, len(rows))
+	for i, in := range rows {
+		// One-based, so a number here names the same row the script's own
+		// diagnostics do, and the row a reader counts to in a viewer.
+		number := i + 1
+
+		if !domain.ValidMonth(in.Month) {
+			return nil, &rowError{Row: number, Column: "month", Err: fmt.Errorf("invalid month %q", in.Month)}
 		}
 
-		month, recordedAt, err := parseMonth(safeGetField(record, monthColumn))
-		if err != nil {
-			return nil, &cellError{
-				Row:    rowNumber,
-				Column: monthColumn + 1,
-				Header: header[monthColumn],
-				Err:    err,
+		// Checked before Normalize, which is the whole point: Normalize
+		// reads the empty direction as an expense, so a row that never said
+		// which way the money moved would import as a bill without a word.
+		// An import is not an entry form — nothing here gets to default.
+		if !domain.Direction(in.Direction).Valid() {
+			return nil, &rowError{
+				Row:    number,
+				Column: "direction",
+				Err:    fmt.Errorf("direction %q is not one of %q, %q", in.Direction, domain.DirectionExpense, domain.DirectionIncome),
 			}
 		}
 
-		for columnNumber, name := range header {
-			if columnNumber == monthColumn || ignoredColumn(name) || name == "" {
-				continue
-			}
+		event := domain.Event{
+			Action:     domain.ActionSet,
+			Month:      in.Month,
+			Type:       in.Type,
+			Amount:     money.Cents(in.AmountCents),
+			Direction:  domain.Direction(in.Direction),
+			RecordedAt: recordedAt(in.Month, now, i),
+		}.Normalize()
 
-			value := strings.TrimSpace(safeGetField(record, columnNumber))
-			if value == "" {
-				continue
-			}
-
-			amount, err := money.Parse(value)
-			if err != nil {
-				return nil, &cellError{
-					Row:    rowNumber,
-					Column: columnNumber + 1,
-					Header: name,
-					Err:    err,
-				}
-			}
-
-			sequence := monthEventCounts[month]
-			monthEventCounts[month] = sequence + 1
-
-			direction := domain.DirectionExpense
-			if strings.EqualFold(name, "Income") {
-				direction = domain.DirectionIncome
-			}
-
-			events = append(events, domain.Event{
-				Action:     domain.ActionSet,
-				Month:      month,
-				Type:       name,
-				Amount:     amount,
-				Direction:  direction,
-				RecordedAt: recordedAt.Add(time.Duration(sequence) * time.Microsecond),
-			})
+		if err := event.Validate(); err != nil {
+			return nil, &rowError{Row: number, Column: columnAtFault(event), Err: err}
 		}
+
+		events = append(events, event)
 	}
+
+	return events, nil
 }
 
-func ignoredColumn(name string) bool {
-	_, ignored := ignoredColumns[strings.ToLower(strings.TrimSpace(name))]
-	return ignored
-}
-
-func parseMonth(value string) (string, time.Time, error) {
-	value = strings.TrimSpace(value)
-	for _, layout := range monthLayouts {
-		t, err := time.Parse(layout, value)
-		if err != nil {
-			continue
+// checkSchema reports whether the file has the columns the importer requires,
+// with the types it requires. Columns beyond them are ignored: a conversion
+// script is free to carry provenance — which cell a row came from — and the
+// importer has no opinion about it.
+func checkSchema(schema *parquet.Schema) error {
+	for _, want := range inputColumns {
+		leaf, ok := schema.Lookup(want.name)
+		if !ok {
+			return fmt.Errorf("importer: input is missing the %q column", want.name)
 		}
-		month := domain.Month(t)
-		return month, time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC), nil
-	}
-	return "", time.Time{}, fmt.Errorf("invalid month %q", value)
-}
-
-func safeGetField(record []string, index int) string {
-	if index >= len(record) {
-		return ""
-	}
-	return record[index]
-}
-
-func isBlankRecord(record []string) bool {
-	for _, field := range record {
-		if strings.TrimSpace(field) != "" {
-			return false
+		if got := leaf.Node.Type().Kind(); got != want.kind {
+			return fmt.Errorf("importer: column %q is %s, want %s", want.name, got, want.kind)
 		}
 	}
-	return true
+	return nil
+}
+
+// recordedAt dates an imported event, which decides what it can be corrected
+// by. The log's order is RecordedAt then ID, and a set supersedes the sets
+// before it, so the last event for a month and type is the one that counts.
+//
+// A month that has already happened is dated at its first instant. That is
+// what makes the import history rather than news: an event replayed for
+// January sorts before every correction made since, so a correction still
+// wins, exactly as it would have if the log had been there all along.
+//
+// A month that has not happened yet is dated now instead. The sheet has rows
+// for months ahead of today — next month's rent is already in it — and dating
+// those at the month they name would stamp them in the future, ahead of any
+// correction the owner makes before the month arrives. The import would then
+// supersede an edit made after it, and the edit would vanish until the month
+// came around. Clamping is what keeps "the last word wins" true in wall-clock
+// terms rather than in spreadsheet terms.
+//
+// sequence is the row's position in the file, and separates events that would
+// otherwise share an instant — the rows of one month, and every row clamped to
+// now. It steps by the resolution the log keeps, so that Normalize's truncation
+// cannot collapse two events back onto each other.
+func recordedAt(month string, now time.Time, sequence int) time.Time {
+	// Safe: the month was checked before this is reached.
+	start, _ := domain.ParseMonth(month)
+	if start.After(now) {
+		start = now
+	}
+	return start.Add(time.Duration(sequence) * time.Microsecond)
+}
+
+// columnAtFault names the column behind a Validate failure, so that a row the
+// domain refuses is reported the same way a row this file refuses is. Only the
+// fields the input can actually get wrong are worth naming: the action and the
+// timestamp are this file's to set, and a fault in either is a bug here rather
+// than a bad row.
+func columnAtFault(e domain.Event) string {
+	switch {
+	case !domain.ValidMonth(e.Month):
+		return "month"
+	case strings.TrimSpace(e.Type) == "":
+		return "type"
+	case !e.Direction.Valid():
+		return "direction"
+	default:
+		return "row"
+	}
 }
