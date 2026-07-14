@@ -42,8 +42,8 @@ func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 	mux.Handle("GET /{$}", handleHome(logger, store, authn))
 	mux.Handle("GET /month/{month}", handleMonth(logger, store, authn))
 
-	// The entry form's hx-post, mounted on the very path the form is rendered
-	// with, so the route and the markup cannot drift apart.
+	// The entry form's hx-post uses view.EntriesPath, so this route is mounted
+	// on that same shared constant and cannot drift from the markup.
 	mux.Handle("POST "+view.EntriesPath, handleEntry(logger, store))
 
 	// The sign-in flow: /auth/login sends the browser to Google,
