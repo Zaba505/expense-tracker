@@ -751,9 +751,9 @@ func typeRenameForm(p Panel) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var40 string
-			templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(Count(len(p.TypeRenamePreview.Months)))
+			templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(CountDisplay(len(p.TypeRenamePreview.Months)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/month.templ`, Line: 244, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/month.templ`, Line: 244, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 			if templ_7745c5c3_Err != nil {
@@ -779,9 +779,9 @@ func typeRenameForm(p Panel) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var41 string
-			templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(Count(p.TypeRenamePreview.AffectedEntries))
+			templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(CountDisplay(p.TypeRenamePreview.AffectedEntries))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/month.templ`, Line: 251, Col: 56}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/month.templ`, Line: 251, Col: 63}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 			if templ_7745c5c3_Err != nil {
@@ -836,9 +836,9 @@ func typeRenameForm(p Panel) templ.Component {
 					}
 				} else {
 					var templ_7745c5c3_Var44 string
-					templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(" — " + Count(month.Entries) + " entries")
+					templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(" — " + CountDisplay(month.Entries) + " entries")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/month.templ`, Line: 266, Col: 53}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/month.templ`, Line: 266, Col: 60}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 					if templ_7745c5c3_Err != nil {

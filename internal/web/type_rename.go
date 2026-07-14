@@ -105,7 +105,8 @@ func handleTypeRename(logger *slog.Logger, log eventlog.EventStore) http.Handler
 			return
 		}
 
-		renderPanel(w, r, logger, mustPanel(r, logger, log, stored.Month, view.NewForm(stored.Month)), http.StatusOK)
+		panel := mustPanel(r, logger, log, stored.Month, view.NewForm(stored.Month))
+		renderPanel(w, r, logger, panel, http.StatusOK)
 	}
 }
 

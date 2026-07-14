@@ -88,6 +88,8 @@ func (aliases typeAliases) resolve(typ string) string {
 		return ""
 	}
 
+	// Follow the alias chain all the way to the current canonical type while
+	// remembering the intermediate names we passed through.
 	var path []string
 	cur := typ
 	for {
@@ -98,6 +100,9 @@ func (aliases typeAliases) resolve(typ string) string {
 		path = append(path, cur)
 		cur = next
 	}
+	// Cache that final answer back onto every intermediate alias we saw, so the
+	// next lookup for any of them resolves in one map read instead of walking the
+	// whole chain again.
 	for _, seen := range path {
 		aliases[seen] = cur
 	}
