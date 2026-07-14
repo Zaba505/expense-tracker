@@ -27,7 +27,7 @@ func readinessResponse(t *testing.T, rec *httptest.ResponseRecorder) readiness {
 func TestReadiness_Healthy(t *testing.T) {
 	t.Parallel()
 
-	store := &stubChecker{}
+	store := newStubStore()
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, readinessPath, nil))
@@ -58,7 +58,9 @@ func TestReadiness_Healthy(t *testing.T) {
 func TestReadiness_Unreachable(t *testing.T) {
 	t.Parallel()
 
-	store := &stubChecker{err: errors.New("dial firestore: connection refused")}
+	store := newStubStore()
+	store.err = errors.New("dial firestore: connection refused")
+
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, readinessPath, nil))
@@ -87,14 +89,15 @@ func TestReadiness_BoundsTheCheck(t *testing.T) {
 	t.Parallel()
 
 	deadlines := make(chan time.Time, 1)
-	store := checkerFunc(func(ctx context.Context) error {
+	store := newStubStore()
+	store.check = func(ctx context.Context) error {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Error("readiness check ran without a deadline")
 		}
 		deadlines <- deadline
 		return ctx.Err()
-	})
+	}
 
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
@@ -108,8 +111,3 @@ func TestReadiness_BoundsTheCheck(t *testing.T) {
 		t.Errorf("status = %d, want %d for a check that returned nil", rec.Code, http.StatusOK)
 	}
 }
-
-// checkerFunc adapts a function to Checker.
-type checkerFunc func(ctx context.Context) error
-
-func (f checkerFunc) Check(ctx context.Context) error { return f(ctx) }

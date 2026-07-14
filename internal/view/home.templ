@@ -2,27 +2,30 @@ package view
 
 import "github.com/Zaba505/expense-tracker/internal/auth"
 
-// Home is the landing page. It is a placeholder: it proves the server,
-// the layout, and the embedded assets are wired together end to end.
-// The month view that replaces it arrives with the entry stories.
+// Home is the landing page: the month panel — the entry form, the month it
+// writes into, and what that month came to — under a line saying who is
+// signed in.
+//
+// The panel is its own component rather than markup inlined here, because the
+// form's hx-post answers with that same component: the page a fresh GET
+// renders and the fragment a submission swaps in come from one template, so
+// the two cannot drift into showing a month two different ways.
 //
 // signedInAs is the email of the account signed in. The shared middleware
 // already enforced access before the page rendered, so this shows which
 // owner session got in rather than deciding who may.
-templ Home(signedInAs string) {
+templ Home(signedInAs string, panel Panel) {
 	@Layout("expense-tracker") {
-		<section class="card">
-			<h1>expense-tracker</h1>
-			<p class="muted">
-				The server is up. Expenses, rollups, and the yearly grid land here.
+		if signedInAs != "" {
+			<p class="muted signed-in">
+				Signed in as <strong>{ signedInAs }</strong>.
+				<a href={ templ.SafeURL(auth.LogoutPath) }>Sign out</a>
 			</p>
-			if signedInAs != "" {
-				<p class="muted">Signed in as <strong>{ signedInAs }</strong>.</p>
-			} else {
-				<p>
-					<a class="button" href={ templ.SafeURL(auth.LoginPath) }>Sign in with Google</a>
-				</p>
-			}
-		</section>
+		} else {
+			<p>
+				<a class="button" href={ templ.SafeURL(auth.LoginPath) }>Sign in with Google</a>
+			</p>
+		}
+		@MonthPanel(panel)
 	}
 }

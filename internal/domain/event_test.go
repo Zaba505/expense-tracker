@@ -197,3 +197,96 @@ func TestEvent_Validate(t *testing.T) {
 		}
 	})
 }
+
+func TestMonth(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		at   time.Time
+		want string
+	}{
+		"a month is zero-padded, so the log's months sort chronologically": {
+			at:   time.Date(2026, 7, 12, 15, 4, 5, 0, time.UTC),
+			want: "2026-07",
+		},
+		"the day and the time are dropped": {
+			at:   time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+			want: "2026-12",
+		},
+		"a zone is resolved to UTC, not ignored": {
+			// 21:30 on the 31st in New York is already 01:30 on the 1st in
+			// UTC, and the log stamps its events in UTC. A month taken in
+			// some other zone and an event stamped seconds later would
+			// otherwise disagree about which month the entry belongs to.
+			at:   time.Date(2026, 7, 31, 21, 30, 0, 0, time.FixedZone("EDT", -4*60*60)),
+			want: "2026-08",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := domain.Month(test.at); got != test.want {
+				t.Errorf("Month(%s) = %q, want %q", test.at, got, test.want)
+			}
+		})
+	}
+}
+
+// TestValidMonth pins the rule the entry form checks a submitted month
+// against. It is Validate's own rule — the two share this function, so a
+// month the form accepts is one the log accepts, and neither can drift into
+// taking a month the other refuses.
+func TestValidMonth(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]bool{
+		"2026-07":    true,
+		"2026-01":    true,
+		"2026-12":    true,
+		"2021-03":    true,
+		"":           false,
+		"2026-13":    false, // no such month
+		"2026-00":    false,
+		"2026-7":     false, // sorts after "2026-12"
+		"2026-07-12": false, // a day, not a month
+		"2026":       false,
+		"July 2026":  false,
+	}
+
+	for month, want := range tests {
+		t.Run(month, func(t *testing.T) {
+			t.Parallel()
+
+			if got := domain.ValidMonth(month); got != want {
+				t.Errorf("ValidMonth(%q) = %t, want %t", month, got, want)
+			}
+		})
+	}
+}
+
+// TestAction_Valid covers what Validate leans on and what the entry form asks
+// before it has an event to validate: an action the fold has no case for is an
+// amount the totals would silently omit, so it is refused at the door.
+func TestAction_Valid(t *testing.T) {
+	t.Parallel()
+
+	tests := map[domain.Action]bool{
+		domain.ActionAdd: true,
+		domain.ActionSet: true,
+		"":               false,
+		"subtract":       false,
+		"ADD":            false,
+	}
+
+	for action, want := range tests {
+		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
+
+			if got := action.Valid(); got != want {
+				t.Errorf("Action(%q).Valid() = %t, want %t", action, got, want)
+			}
+		})
+	}
+}

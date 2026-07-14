@@ -8,6 +8,7 @@
   --text: #1c1c1a;
   --muted: #6b6b66;
   --accent: #2f6f4f;
+  --danger: #a3352b;
   --radius: 8px;
 }
 
@@ -19,6 +20,7 @@
     --text: #ececea;
     --muted: #9a9a94;
     --accent: #6fbf94;
+    --danger: #e88a80;
   }
 }
 
@@ -82,8 +84,179 @@ a {
   display: inline-block;
   padding: 0.5rem 1rem;
   background: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: var(--radius);
   color: var(--surface);
+  font: inherit;
   font-weight: 600;
   text-decoration: none;
+  cursor: pointer;
+}
+
+.signed-in {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+}
+
+/* The month panel: the entry form, the month it writes into, and what that
+   month came to. It is one element because htmx swaps it as one. */
+
+.panel-head h2 {
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+}
+
+/* The form is a grid so the fields wrap on a phone instead of scrolling. The
+   type field spans two columns because it is the one with the long values. */
+.entry {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1rem;
+  align-items: start;
+  margin-bottom: 1.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.field-wide {
+  grid-column: span 2;
+}
+
+.field-submit {
+  justify-content: end;
+}
+
+.field > label,
+.field > legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+}
+
+.field input:focus-visible,
+.field select:focus-visible,
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A refused field says so twice: the border and the message below it. Colour
+   alone would leave the reason to be guessed at. */
+.field [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.8125rem;
+}
+
+/* The direction toggle. The radios stay real radios — they are what makes the
+   choice keyboard-reachable and what posts the value — and only look joined. */
+.toggle {
+  gap: 0.35rem;
+}
+
+.toggle .choice {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.25rem 0;
+  font-size: 0.9375rem;
+}
+
+.toggle .choice input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* What the log folds to for this month. */
+
+.cells {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.cells th,
+.cells td {
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.cells th {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.cells .amount {
+  text-align: right;
+}
+
+.cells .direction {
+  color: var(--muted);
+}
+
+.empty {
+  margin: 0;
+  padding: 1rem 0;
+}
+
+/* The rollup: what the month came to, out and in and what was left. */
+.rollup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  justify-content: end;
+  margin: 1rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.rollup div {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.rollup dt {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.rollup dd {
+  margin: 0;
+}
+
+.rollup .net dd {
+  font-weight: 700;
 }
