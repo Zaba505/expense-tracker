@@ -84,7 +84,8 @@ func canonicalEvents(events []domain.Event, aliases typeAliases) ([]domain.Event
 
 // resolve follows a type's alias chain to the current canonical name and caches
 // the result back onto every intermediate alias it passed through, so repeated
-// lookups do not have to traverse the same chain again.
+// lookups do not have to traverse the same chain again. A visited set breaks a
+// malformed cycle defensively by stopping at the first repeated alias.
 func (aliases typeAliases) resolve(typ string) string {
 	typ = strings.TrimSpace(typ)
 	if typ == "" {
@@ -94,13 +95,18 @@ func (aliases typeAliases) resolve(typ string) string {
 	// Follow the alias chain all the way to the current canonical type while
 	// remembering the intermediate names we passed through.
 	var path []string
+	seen := map[string]struct{}{typ: {}}
 	cur := typ
 	for {
 		next, ok := aliases[cur]
 		if !ok || next == "" || next == cur {
 			break
 		}
+		if _, ok := seen[next]; ok {
+			break
+		}
 		path = append(path, cur)
+		seen[next] = struct{}{}
 		cur = next
 	}
 	// Cache that final answer back onto every intermediate alias we saw, so the

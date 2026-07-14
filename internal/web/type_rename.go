@@ -27,7 +27,9 @@ func handleTypeRename(logger *slog.Logger, log eventlog.EventStore) http.Handler
 		month := typeRenameMonth(r.PostForm)
 		form, intent := parseTypeRename(r.PostForm)
 		if form.Rejected() {
-			renderTypeRenamePanel(w, r, logger, log, month, form, projection.TypeRenamePreview{}, http.StatusUnprocessableEntity)
+			panel := mustPanel(r, logger, log, month, view.NewForm(month))
+			panel.TypeRenameForm = form
+			renderPanel(w, r, logger, panel, http.StatusUnprocessableEntity)
 			return
 		}
 
@@ -132,11 +134,4 @@ func typeRenameMonth(values url.Values) string {
 		return month
 	}
 	return domain.Month(time.Now())
-}
-
-func renderTypeRenamePanel(w http.ResponseWriter, r *http.Request, logger *slog.Logger, log eventlog.EventStore, month string, form view.TypeRenameForm, preview projection.TypeRenamePreview, status int) {
-	panel := mustPanel(r, logger, log, month, view.NewForm(month))
-	panel.TypeRenameForm = form
-	panel.TypeRenamePreview = preview
-	renderPanel(w, r, logger, panel, status)
 }

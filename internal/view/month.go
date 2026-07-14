@@ -226,4 +226,4 @@ func shiftMonth(month string, by int) string {
 	return domain.Month(t.AddDate(0, by, 0))
 }
 
-func CountDisplay(n int) string { return strconv.Itoa(n) }
+func FormatCount(n int) string { return strconv.Itoa(n) }

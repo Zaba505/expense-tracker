@@ -241,14 +241,14 @@ templ typeRenameForm(p Panel) {
 				<span>will become</span>
 				<strong>{ p.TypeRenamePreview.ToType }</strong>
 				<span>in</span>
-				<strong>{ CountDisplay(len(p.TypeRenamePreview.Months)) }</strong>
+				<strong>{ FormatCount(len(p.TypeRenamePreview.Months)) }</strong>
 				if len(p.TypeRenamePreview.Months) == 1 {
 					<span>month</span>
 				} else {
 					<span>months</span>
 				}
 				<span>across</span>
-				<strong>{ CountDisplay(p.TypeRenamePreview.AffectedEntries) }</strong>
+				<strong>{ FormatCount(p.TypeRenamePreview.AffectedEntries) }</strong>
 				if p.TypeRenamePreview.AffectedEntries == 1 {
 					<span>entry.</span>
 				} else {
@@ -263,7 +263,7 @@ templ typeRenameForm(p Panel) {
 							if month.Entries == 1 {
 								{ " — 1 entry" }
 							} else {
-								{ " — " + CountDisplay(month.Entries) + " entries" }
+								{ " — " + FormatCount(month.Entries) + " entries" }
 							}
 						</span>
 					</li>
