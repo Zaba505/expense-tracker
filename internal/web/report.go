@@ -70,11 +70,19 @@ func validYear(year string) bool {
 }
 
 func previousYear(year string) string {
-	y, _ := strconv.Atoi(year)
+	y := mustParseYear(year)
 	return strconv.Itoa(y - 1)
 }
 
 func nextYear(year string) string {
-	y, _ := strconv.Atoi(year)
+	y := mustParseYear(year)
 	return strconv.Itoa(y + 1)
+}
+
+func mustParseYear(year string) int {
+	y, err := strconv.Atoi(year)
+	if err != nil {
+		panic("web: invalid year " + strconv.Quote(year))
+	}
+	return y
 }

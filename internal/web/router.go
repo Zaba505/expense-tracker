@@ -3,6 +3,7 @@ package web
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Zaba505/expense-tracker/internal/auth"
@@ -79,7 +80,8 @@ func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 // form, which is the same field they would use to record last March.
 func handleHome(logger *slog.Logger, log eventlog.EventStore, authn authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		renderMonthPage(w, r, logger, log, authn, domain.Month(time.Now()))
+		month := domain.Month(time.Now())
+		renderMonthPage(w, r, logger, log, authn, month, formFromRequest(r, month))
 	}
 }
 
@@ -97,11 +99,11 @@ func handleMonth(logger *slog.Logger, log eventlog.EventStore, authn authenticat
 			http.NotFound(w, r)
 			return
 		}
-		renderMonthPage(w, r, logger, log, authn, month)
+		renderMonthPage(w, r, logger, log, authn, month, formFromRequest(r, month))
 	}
 }
 
-func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, log eventlog.EventStore, authn authenticator, month string) {
+func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, log eventlog.EventStore, authn authenticator, month string, form view.Form) {
 	var email string
 	if session, ok := authn.Session(r); ok {
 		email = session.Email
@@ -109,7 +111,7 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 
 	// The fold happens before a byte is written, so a log that cannot be
 	// read is an honest 500 — unlike the render below, which cannot be.
-	panel, err := loadPanel(r.Context(), log, month, view.NewForm(month))
+	panel, err := loadPanel(r.Context(), log, month, form)
 	if err != nil {
 		logger.ErrorContext(r.Context(), "folding the log for the month page",
 			slog.String("month", month),
@@ -129,4 +131,23 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 			slog.Any("error", err),
 		)
 	}
+}
+
+func formFromRequest(r *http.Request, month string) view.Form {
+	form := view.NewForm(month)
+	query := r.URL.Query()
+
+	form.Type.Value = strings.TrimSpace(query.Get("type"))
+	form.Amount.Value = strings.TrimSpace(query.Get("amount"))
+	form.Note.Value = strings.TrimSpace(query.Get("note"))
+	form.RefEventID.Value = strings.TrimSpace(query.Get("refEventId"))
+
+	if direction := strings.TrimSpace(query.Get("direction")); direction != "" {
+		form.Direction.Value = direction
+	}
+	if action := strings.TrimSpace(query.Get("action")); action != "" {
+		form.Action.Value = action
+	}
+
+	return form
 }

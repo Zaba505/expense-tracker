@@ -19,6 +19,7 @@ templ MonthPanel(p Panel) {
 		</header>
 		@entryForm(p.Form)
 		@monthTable(p)
+		@auditTrail(p)
 		@typeOptions(p.KnownTypes)
 	</section>
 }
@@ -123,6 +124,26 @@ templ entryForm(f Form) {
 			</select>
 			@fieldError(f.Action)
 		</div>
+		<div class="field field-wide">
+			<label for="entry-note">Note</label>
+			<input
+				id="entry-note"
+				type="text"
+				name="note"
+				value={ f.Note.Value }
+				placeholder="Why this correction was needed"
+			/>
+		</div>
+		<div class="field field-wide">
+			<label for="entry-ref-event-id">Ref event ID</label>
+			<input
+				id="entry-ref-event-id"
+				type="text"
+				name="refEventId"
+				value={ f.RefEventID.Value }
+				placeholder="The event this entry corrects"
+			/>
+		</div>
 		<div class="field field-submit">
 			<button class="button" type="submit">Record</button>
 		</div>
@@ -178,6 +199,61 @@ templ monthTable(p Panel) {
 			<dd class="amount">{ p.Rollup.Net().Display() }</dd>
 		</div>
 	</dl>
+}
+
+templ auditTrail(p Panel) {
+	<section class="audit">
+		<h3>Audit trail</h3>
+		if len(p.Events) == 0 {
+			<p class="muted empty">No entries recorded for { p.Month } yet.</p>
+		} else {
+			<ol class="audit-trail">
+				for _, event := range p.Events {
+					<li class="audit-event">
+						<div class="audit-head">
+							<code>{ event.ID }</code>
+							<span>{ RecordedAtDisplay(event.RecordedAt) }</span>
+						</div>
+						<p class="audit-summary">
+							<strong>{ string(event.Action) }</strong>
+							<span>{ event.Type }</span>
+							<span class="direction">{ string(event.Direction) }</span>
+							<span>for</span>
+							<span class="amount">{ event.Amount.Display() }</span>
+						</p>
+						if event.Note != "" {
+							<p class="muted">Note: { event.Note }</p>
+						}
+						if event.RefEventID != "" {
+							<p class="muted">Corrects { event.RefEventID }</p>
+						}
+						<div class="audit-actions">
+							<a class="button" href={ p.CorrectionPath(event) }>{ CorrectionLabel(event) }</a>
+							if CanVoid(event) {
+								<form
+									class="audit-void"
+									method="post"
+									action={ EntriesPath }
+									hx-post={ EntriesPath }
+									hx-target={ PanelTarget }
+									hx-swap="outerHTML"
+								>
+									<input type="hidden" name="month" value={ event.Month }/>
+									<input type="hidden" name="type" value={ event.Type }/>
+									<input type="hidden" name="amount" value={ VoidAmount(event) }/>
+									<input type="hidden" name="direction" value={ string(event.Direction) }/>
+									<input type="hidden" name="action" value={ string(domain.ActionAdd) }/>
+									<input type="hidden" name="note" value={ VoidNote(event) }/>
+									<input type="hidden" name="refEventId" value={ event.ID }/>
+									<button class="button" type="submit">Void</button>
+								</form>
+							}
+						</div>
+					</li>
+				}
+			</ol>
+		}
+	</section>
 }
 
 // typeOptions is the type input's autocomplete: every type the log has

@@ -301,6 +301,83 @@ func TestMonthView_EmptyMonthRendersAReadyForm(t *testing.T) {
 	}
 }
 
+func TestMonthView_CorrectionQueryPrefillsTheForm(t *testing.T) {
+	t.Parallel()
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn),
+		"/month/2026-10?type=Groceries&direction=income&action=set&note=fix+the+import&refEventId=evt-42")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET correction-prefill status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`name="type" value="Groceries"`,
+		`value="income" checked`,
+		`value="set" selected`,
+		`name="note" value="fix the import"`,
+		`name="refEventId" value="evt-42"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the prefilled month view does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestMonthView_AuditTrailOffersCorrectionAndVoidControls(t *testing.T) {
+	t.Parallel()
+
+	store := newStubStore()
+	added, err := store.Append(t.Context(), domain.Event{
+		Action: domain.ActionAdd, Month: "2026-07", Type: "Groceries",
+		Amount: money.Cents(10_00), Direction: domain.DirectionExpense,
+	})
+	if err != nil {
+		t.Fatalf("seeding the add event: %v", err)
+	}
+	set, err := store.Append(t.Context(), domain.Event{
+		Action: domain.ActionSet, Month: "2026-07", Type: "Rent",
+		Amount: money.Cents(55_00), Direction: domain.DirectionExpense,
+	})
+	if err != nil {
+		t.Fatalf("seeding the set event: %v", err)
+	}
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, authn), "/month/2026-07")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /month/2026-07 status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Audit trail",
+		added.ID,
+		set.ID,
+		"Adjust",
+		"Override",
+		"Void",
+		`name="refEventId" value="` + added.ID + `"`,
+		`name="amount" value="-10.00"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /month/2026-07 body does not contain %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `name="refEventId" value="`+set.ID+`"`) && strings.Contains(body, `name="amount" value="-55.00"`) {
+		t.Errorf("the set row rendered a one-click void, want only an override:\n%s", body)
+	}
+}
+
 func TestMonthView_RejectsMalformedMonths(t *testing.T) {
 	t.Parallel()
 

@@ -98,6 +98,10 @@ func ProjectYear(state State, year string) (Year, error) {
 
 		switch key.Direction {
 		case domain.DirectionExpense, "":
+			// The zero direction is an expense — domain.Event.Normalize's rule, and
+			// the one Fold keys by. A State assembled by hand can still carry the
+			// zero value, and counting it as expense keeps this projection aligned
+			// with the rest of the rollups.
 			report.Months[i].Rollup.Expenses += amount
 			report.Total.Rollup.Expenses += amount
 		case domain.DirectionIncome:
@@ -127,6 +131,9 @@ func average(total money.Cents, over int) money.Cents {
 
 	divisor := int64(over)
 	cents := int64(total)
+	// Round to the nearest cent count away from zero on a half, so yearly
+	// averages stay symmetric for expenses (positive) and credits or walk-backs
+	// (negative) instead of truncating toward zero.
 	if cents < 0 {
 		return money.Cents((cents - divisor/2) / divisor)
 	}
