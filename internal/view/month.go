@@ -178,4 +178,4 @@ func VoidAmount(e domain.Event) string { return (-e.Amount).String() }
 func VoidNote(e domain.Event) string { return "voids " + e.ID }
 
 // RecordedAtDisplay is the audit-trail rendering of one event timestamp.
-func RecordedAtDisplay(t time.Time) string { return t.Format("2006-01-02 15:04:05 UTC") }
+func RecordedAtDisplay(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 UTC") }
