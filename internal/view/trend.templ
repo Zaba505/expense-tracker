@@ -1,0 +1,131 @@
+package view
+
+import "strconv"
+
+import "github.com/Zaba505/expense-tracker/internal/projection"
+
+// TypeTrend is one type's history across the whole log: the picker that chose
+// the type, every month of the log's range, and what those months came to.
+//
+// It is a page rather than a panel, and a plain form rather than an htmx swap,
+// for the reason the yearly report is: a trend is an addressable projection, so
+// picking a type navigates to that type's URL and the result can be
+// bookmarked, linked, and reloaded.
+templ TypeTrend(signedInAs string, page TrendPage) {
+	@Layout("expense-tracker") {
+		@sessionBanner(signedInAs)
+		<section class="card report-card">
+			if page.Selected() {
+				<h1>{ page.Trend.Type }</h1>
+			} else {
+				<h1>Type trend</h1>
+			}
+			@trendPicker(page)
+			if page.Selected() {
+				if page.Trend.Empty() {
+					// A picked type the log has nothing for is not a type that cost
+					// nothing — it is a name the log has never read anything under,
+					// which is what a retired or misspelled one looks like from here.
+					<p class="empty">
+						<span>The log has nothing recorded for</span>
+						<strong>{ page.Trend.Type }</strong>
+						<span>— it may have been renamed, or never used.</span>
+					</p>
+				} else {
+					@trendNote(page.Trend)
+					@trendTable(page.Trend)
+				}
+			}
+			@typeOptions(page.KnownTypes)
+		</section>
+	}
+}
+
+// trendPicker chooses the type the report is about. It offers the log's types
+// as autocomplete but does not constrain the input to them, for the reason the
+// entry form's does not: the log's types are whatever has been typed, so a name
+// that is not on the list is a name worth asking about — the answer is simply
+// that the log has nothing for it.
+templ trendPicker(page TrendPage) {
+	<form class="entry" action={ TrendsPath } method="get">
+		<div class="field field-wide">
+			<label for="trend-type">Type</label>
+			<input
+				id="trend-type"
+				type="text"
+				name={ TrendTypeParam }
+				value={ page.Trend.Type }
+				list={ typesListID }
+				autocomplete="off"
+				placeholder="Groceries"
+				required
+			/>
+		</div>
+		<div class="field field-submit">
+			<button class="button" type="submit">Show trend</button>
+		</div>
+	</form>
+}
+
+// trendNote says what the summaries are an average of, because a trend's rows
+// and its footer count different months: the rows are the log's whole range and
+// the footer is only the months this type was recorded in.
+templ trendNote(t projection.Trend) {
+	<p class="muted trend-note">
+		<span>Recorded in</span>
+		<strong>{ strconv.Itoa(t.Observed) }</strong>
+		<span>of</span>
+		<strong>{ strconv.Itoa(len(t.Months)) }</strong>
+		<span>{ Plural(len(t.Months), "month", "months") + "." }</span>
+		<span>The summaries are over the recorded months; a gap is a month the log says nothing about.</span>
+	</p>
+}
+
+templ trendTable(t projection.Trend) {
+	<div class="table-scroll">
+		<table class="cells report-grid trend-grid">
+			<thead>
+				<tr>
+					<th scope="col">Month</th>
+					<th scope="col" class="amount">{ t.Type }</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, month := range t.Months {
+					<tr>
+						<th scope="row">
+							<a href={ templ.SafeURL(MonthPath(month.Month)) }>{ month.Month }</a>
+						</th>
+						if month.Gap() {
+							// An em dash rather than $0.00, because the two say
+							// different things and only one of them is true here: a
+							// zero is a cell an event set to nothing, and a gap is
+							// the log declining to say anything at all.
+							<td class="amount gap">—</td>
+						} else {
+							<td class="amount">{ month.Amount.Display() }</td>
+						}
+					</tr>
+				}
+			</tbody>
+			<tfoot>
+				<tr>
+					<th scope="row">Min</th>
+					<td class="amount">{ t.Min.Display() }</td>
+				</tr>
+				<tr>
+					<th scope="row">Max</th>
+					<td class="amount">{ t.Max.Display() }</td>
+				</tr>
+				<tr>
+					<th scope="row">Average</th>
+					<td class="amount">{ t.Average.Display() }</td>
+				</tr>
+				<tr>
+					<th scope="row">Total</th>
+					<td class="amount">{ t.Total.Display() }</td>
+				</tr>
+			</tfoot>
+		</table>
+	</div>
+}

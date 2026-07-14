@@ -17,7 +17,13 @@ templ YearReport(signedInAs string, report projection.Year, previousYear string,
 						<tr>
 							<th scope="col">Month</th>
 							for _, typ := range report.Types {
-								<th scope="col" class="amount">{ typ }</th>
+								// The column head is the way into that type's trend: the
+								// year grid is where a column looks wrong, and the trend
+								// is where it is explained, so picking a type is a click
+								// on the one already in front of the owner.
+								<th scope="col" class="amount">
+									<a href={ templ.SafeURL(TrendPath(typ)) }>{ typ }</a>
+								</th>
 							}
 							<th scope="col" class="amount">Expenses</th>
 							<th scope="col" class="amount">Income</th>
