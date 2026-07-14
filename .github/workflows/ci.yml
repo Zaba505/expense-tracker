@@ -173,7 +173,11 @@ jobs:
           # Staged, not `git diff --exit-code` on the worktree: a plain diff is
           # blind to a file that is entirely new, and adding a module dependency
           # generates exactly that (a new client under internal/dagger/).
-          git add -A
+          #
+          # Scoped to what `dagger develop` actually writes, because the workspace
+          # is not clean to begin with: `Set up Dagger` restores the cached engine
+          # image to ./engine.tar.gz, and a bare `git add -A` stages that instead.
+          git add -A -- .dagger dagger.json
           if ! git diff --cached --quiet; then
             echo "::error::.dagger/'s generated client is stale. Run \`dagger develop\` and commit what it writes."
             git diff --cached --stat
