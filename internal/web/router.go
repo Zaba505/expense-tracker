@@ -175,10 +175,7 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 }
 
 func renderHomePage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, authn authenticator, panel view.Panel) {
-	var email string
-	if session, ok := authn.Session(r); ok {
-		email = session.Email
-	}
+	email := sessionEmail(authn, r)
 
 	// Logged, not answered with a 500: templ streams straight to the
 	// ResponseWriter, so by the time a render can fail the status line

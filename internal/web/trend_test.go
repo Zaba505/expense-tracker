@@ -15,17 +15,17 @@ import (
 // it, so a test asks for a type the same way a link does — escaping included.
 func trendPath(typ string) string { return view.TrendPath(typ) }
 
-func TestTrendView_RendersATypeAcrossTheLogsFullRange(t *testing.T) {
+func TestTrendView_RendersATypeAcrossItsRange(t *testing.T) {
 	t.Parallel()
 
 	handler, store := ownerHandler(t)
-	// Gas runs Nov and Jan; the log runs Nov to Feb. December and February are
-	// the gaps, and they are what this report exists to show.
+	// Gas runs Nov to Feb and lapses in December. The log is wider than Gas is
+	// — Rent reaches into March — and that is not Gas's business.
 	for _, event := range []domain.Event{
 		{Action: domain.ActionSet, Month: "2025-11", Type: "Gas", Amount: money.Cents(40_00), Direction: domain.DirectionExpense},
 		{Action: domain.ActionSet, Month: "2025-12", Type: "Rent", Amount: money.Cents(1200_00), Direction: domain.DirectionExpense},
 		{Action: domain.ActionSet, Month: "2026-01", Type: "Gas", Amount: money.Cents(60_00), Direction: domain.DirectionExpense},
-		{Action: domain.ActionSet, Month: "2026-02", Type: "Rent", Amount: money.Cents(1200_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionSet, Month: "2026-03", Type: "Rent", Amount: money.Cents(1200_00), Direction: domain.DirectionExpense},
 	} {
 		seed(t, store, event)
 	}
@@ -39,17 +39,15 @@ func TestTrendView_RendersATypeAcrossTheLogsFullRange(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"<h1>Gas</h1>",
-		// Every month of the log's range is a row, including the two Gas is
-		// absent from.
+		// Gas's own months, with the one it lapsed in between them.
 		`href="/month/2025-11"`,
 		`href="/month/2025-12"`,
 		`href="/month/2026-01"`,
-		`href="/month/2026-02"`,
 		"$40.00",
 		"$60.00",
-		// A gap renders as an em dash, not as $0.00.
+		// The lapsed month renders as an em dash, not as $0.00.
 		`class="amount gap">—<`,
-		// Min, max and average are over the two recorded months.
+		// Min, max and average are over the two months Gas was recorded in.
 		">Min<",
 		">Max<",
 		">Average<",
@@ -60,39 +58,48 @@ func TestTrendView_RendersATypeAcrossTheLogsFullRange(t *testing.T) {
 		}
 	}
 
-	// Rent is another type's money, and it must not leak into Gas's rows.
+	// March is Rent's month, past the end of Gas's range: not a row here.
+	if strings.Contains(body, `href="/month/2026-03"`) {
+		t.Error("the trend for Gas is stretched to a month only Rent was recorded in")
+	}
+	// And Rent's money must not leak into Gas's rows.
 	if strings.Contains(body, "$1,200.00") {
 		t.Error("the trend for Gas shows Rent's amounts")
 	}
 }
 
-func TestTrendView_TellsARecordedZeroFromAGap(t *testing.T) {
+func TestTrendView_DoesNotCountAVoidedEntryAsAMonth(t *testing.T) {
 	t.Parallel()
 
 	handler, store := ownerHandler(t)
-	// December is a cell an event set to nothing — the way an entry is retired
-	// in a log that cannot delete one. January is a month the log never
-	// mentioned Gas in. The page must not render them alike.
+	// The month view voids an entry by appending the opposite of it, since an
+	// append-only log cannot delete one. December's cell survives at zero, and
+	// the trend must read that as "this never happened" rather than as a month
+	// Gas cost nothing — which would drag Min to $0.00 and halve the average.
 	for _, event := range []domain.Event{
-		{Action: domain.ActionSet, Month: "2025-11", Type: "Gas", Amount: money.Cents(40_00), Direction: domain.DirectionExpense},
-		{Action: domain.ActionSet, Month: "2025-12", Type: "Gas", Amount: money.Cents(0), Direction: domain.DirectionExpense},
-		{Action: domain.ActionSet, Month: "2026-01", Type: "Rent", Amount: money.Cents(1200_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2025-11", Type: "Gas", Amount: money.Cents(40_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2025-12", Type: "Gas", Amount: money.Cents(50_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2025-12", Type: "Gas", Amount: money.Cents(-50_00), Direction: domain.DirectionExpense},
+		{Action: domain.ActionAdd, Month: "2026-01", Type: "Gas", Amount: money.Cents(60_00), Direction: domain.DirectionExpense},
 	} {
 		seed(t, store, event)
 	}
 
 	body := getWithHandler(t, handler, trendPath("Gas")).Body.String()
 
-	if !strings.Contains(body, "$0.00") {
-		t.Error("the recorded zero does not render as $0.00")
-	}
+	// The voided month is a gap, and no $0.00 stands in for it.
 	if !strings.Contains(body, `class="amount gap">—<`) {
-		t.Error("the month with no events does not render as a gap")
+		t.Error("the voided month does not render as a gap")
 	}
-	// The zero counts as a recorded month: two months observed, and the minimum
-	// is the zero rather than the $40.00.
+	if strings.Contains(body, "$0.00") {
+		t.Error("the voided month renders as $0.00: the correction became a month of history")
+	}
+	// Two months observed, averaging $50.00 — not three averaging $33.33.
 	if !strings.Contains(body, "<strong>2</strong>") {
-		t.Error("the recorded zero is not counted among the observed months")
+		t.Error("the voided month is counted among the observed months")
+	}
+	if !strings.Contains(body, "$50.00") {
+		t.Error("the average is not over the two months Gas was actually spent in")
 	}
 }
 

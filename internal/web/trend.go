@@ -42,10 +42,7 @@ func handleTrend(logger *slog.Logger, log eventlog.EventStore, authn authenticat
 			return
 		}
 
-		var email string
-		if session, ok := authn.Session(r); ok {
-			email = session.Email
-		}
+		email := sessionEmail(authn, r)
 
 		// Logged, not answered with a 500: templ streams straight to the
 		// ResponseWriter, so by the time a render can fail the status line and
@@ -59,15 +56,15 @@ func handleTrend(logger *slog.Logger, log eventlog.EventStore, authn authenticat
 	}
 }
 
-// loadTrend folds the log once and takes both halves of the trend page from it:
-// the picked type's history, and the types there are to pick from.
+// loadTrend drains the log once and takes both halves of the trend page from
+// it: the types there are to pick from, and the picked type's history.
 //
-// It needs the events as well as the folded state — the types come from
-// KnownTypes, which reads the log's recency, and the history comes from the
-// state — which is exactly the pair loadState hands back, so the log is drained
-// once for both.
+// It folds only when a type was actually picked. The picker on its own needs
+// KnownTypes and nothing else, and the fold is the expensive half — a full
+// canonicalization plus a State over every event — so an unpicked report does
+// not pay for a projection it is about to throw away.
 func loadTrend(ctx context.Context, log eventlog.EventStore, typ string) (view.TrendPage, error) {
-	events, state, err := loadState(ctx, log)
+	events, err := loadEvents(ctx, log)
 	if err != nil {
 		return view.TrendPage{}, err
 	}
@@ -85,6 +82,11 @@ func loadTrend(ctx context.Context, log eventlog.EventStore, typ string) (view.T
 	// 500.
 	if typ == "" {
 		return page, nil
+	}
+
+	state, err := projection.Fold(events)
+	if err != nil {
+		return view.TrendPage{}, fmt.Errorf("folding the log: %w", err)
 	}
 
 	trend, err := projection.ProjectTrend(state, typ)

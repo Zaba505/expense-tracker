@@ -15,6 +15,21 @@ type authenticator interface {
 	LogoutHandler() http.Handler
 }
 
+// sessionEmail is who the page says it is signed in as, or "" for a request
+// with no session behind it.
+//
+// It is one function rather than the same four lines in every page handler so
+// that the identity every page banners is derived in one place: three pages
+// rendering the signed-in account three times is three chances for one of them
+// to go on showing the old answer when that derivation changes.
+func sessionEmail(authn authenticator, r *http.Request) string {
+	session, ok := authn.Session(r)
+	if !ok {
+		return ""
+	}
+	return session.Email
+}
+
 // requireOwner is the application's one authorization gate. It lets the auth
 // flow and health probes through unchanged, serves protected routes only to a
 // session whose email matches OWNER_EMAIL, clears non-owner sessions before
