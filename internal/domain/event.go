@@ -140,6 +140,29 @@ func (e Event) Normalize() Event {
 	return e
 }
 
+// Month is the calendar month t falls in, in the layout Event.Month uses.
+// It is UTC's month, because the log's timestamps are UTC: an entry form
+// defaulting to "this month" and an event stamped seconds later must not
+// disagree about which month that is.
+func Month(t time.Time) string {
+	return t.UTC().Format(monthLayout)
+}
+
+// ValidMonth reports whether s is a calendar month in the layout
+// Event.Month requires: zero-padded, no day, "2026-07".
+//
+// It is exported for the same reason Direction.Valid is: the entry form has
+// to say which field a submission was refused for, and it can only do that by
+// checking the fields one at a time, before there is an event to Validate. A
+// second copy of this rule living in the web layer is a copy that can drift —
+// and this one is load-bearing beyond well-formedness, since a month that is
+// not zero-padded ("2026-7") sorts after December and would quietly file
+// itself at the end of the year.
+func ValidMonth(s string) bool {
+	_, err := time.Parse(monthLayout, s)
+	return err == nil
+}
+
 // Validate reports whether e is a well-formed event, wrapping
 // ErrInvalidEvent with the field at fault.
 //
@@ -149,10 +172,10 @@ func (e Event) Normalize() Event {
 // — a store normalizes first — and so requires the fields a default would
 // have filled.
 func (e Event) Validate() error {
-	if !e.Action.valid() {
+	if !e.Action.Valid() {
 		return fmt.Errorf("%w: action %q is not one of %q, %q", ErrInvalidEvent, e.Action, ActionAdd, ActionSet)
 	}
-	if _, err := time.Parse(monthLayout, e.Month); err != nil {
+	if !ValidMonth(e.Month) {
 		return fmt.Errorf("%w: month %q is not a calendar month %q", ErrInvalidEvent, e.Month, monthLayout)
 	}
 	if e.Type == "" {
@@ -167,11 +190,15 @@ func (e Event) Validate() error {
 	return nil
 }
 
-// valid reports whether the action is one the fold knows how to apply.
+// Valid reports whether the action is one the fold knows how to apply.
 // Unknown actions are refused at the door rather than ignored at fold
 // time: an event nothing folds is an amount the user entered and the
 // totals silently omit.
-func (a Action) valid() bool {
+//
+// Exported alongside Direction.Valid, and for its reason: the entry form
+// checks each field on its own so it can name the one at fault, which it does
+// before there is an event for Validate to judge as a whole.
+func (a Action) Valid() bool {
 	switch a {
 	case ActionAdd, ActionSet:
 		return true

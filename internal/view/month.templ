@@ -1,0 +1,192 @@
+package view
+
+import (
+	"github.com/Zaba505/expense-tracker/internal/domain"
+	"github.com/Zaba505/expense-tracker/internal/projection"
+)
+
+// MonthPanel is the entry form and the month it writes into, in one element.
+//
+// It is rendered two ways from the same template: inside the page on a GET,
+// and on its own as the answer to the form's hx-post. The form swaps this
+// whole element (PanelTarget, outerHTML), so the values and rollups the reply
+// shows are the ones the appended event folded into — the page cannot end up
+// displaying a total that predates the entry the user just made.
+templ MonthPanel(p Panel) {
+	<section id={ PanelID } class="card panel">
+		<header class="panel-head">
+			<h2>{ p.Month }</h2>
+		</header>
+		@entryForm(p.Form)
+		@monthTable(p)
+		@typeOptions(p.KnownTypes)
+	</section>
+}
+
+// entryForm records one event. Every field posts the domain's own vocabulary —
+// the radio values are domain.Direction, the options are domain.Action — so
+// nothing has to be translated between what the form says and what the log
+// stores.
+templ entryForm(f Form) {
+	<form
+		class="entry"
+		hx-post={ EntriesPath }
+		hx-target={ PanelTarget }
+		hx-swap="outerHTML"
+	>
+		<div class="field">
+			<label for="entry-month">Month</label>
+			<input
+				id="entry-month"
+				type="month"
+				name="month"
+				value={ f.Month.Value }
+				if f.Month.Error != "" {
+					aria-invalid="true"
+				}
+				required
+			/>
+			@fieldError(f.Month)
+		</div>
+		<div class="field field-wide">
+			<label for="entry-type">Type</label>
+			// Free-form, with the log's own types offered as suggestions: a
+			// datalist completes but never constrains, so a type made up on the
+			// spot is typed straight in. autocomplete="off" keeps the browser's
+			// own history out of the way of the list the log actually knows.
+			<input
+				id="entry-type"
+				type="text"
+				name="type"
+				value={ f.Type.Value }
+				list={ typesListID }
+				autocomplete="off"
+				placeholder="Groceries"
+				if f.Type.Error != "" {
+					aria-invalid="true"
+				}
+				required
+			/>
+			@fieldError(f.Type)
+		</div>
+		<div class="field">
+			<label for="entry-amount">Amount</label>
+			// Text, not number: money.Parse takes "$1,234.56" and "(5.00)" as
+			// readily as "12.34", and a number input would refuse to submit the
+			// shapes it accepts. What makes an amount an amount is decided on
+			// the server, where a curl gets the same answer the browser does.
+			<input
+				id="entry-amount"
+				type="text"
+				name="amount"
+				value={ f.Amount.Value }
+				inputmode="decimal"
+				placeholder="0.00"
+				if f.Amount.Error != "" {
+					aria-invalid="true"
+				}
+				required
+			/>
+			@fieldError(f.Amount)
+		</div>
+		<fieldset class="field toggle">
+			<legend>Direction</legend>
+			<label class="choice">
+				<input
+					type="radio"
+					name="direction"
+					value={ string(domain.DirectionExpense) }
+					checked?={ f.DirectionIs(domain.DirectionExpense) }
+				/>
+				Expense
+			</label>
+			<label class="choice">
+				<input
+					type="radio"
+					name="direction"
+					value={ string(domain.DirectionIncome) }
+					checked?={ f.DirectionIs(domain.DirectionIncome) }
+				/>
+				Income
+			</label>
+			@fieldError(f.Direction)
+		</fieldset>
+		<div class="field">
+			<label for="entry-action">Action</label>
+			<select id="entry-action" name="action">
+				<option value={ string(domain.ActionAdd) } selected?={ f.ActionIs(domain.ActionAdd) }>
+					Add to the month
+				</option>
+				<option value={ string(domain.ActionSet) } selected?={ f.ActionIs(domain.ActionSet) }>
+					Set the month's total
+				</option>
+			</select>
+			@fieldError(f.Action)
+		</div>
+		<div class="field field-submit">
+			<button class="button" type="submit">Record</button>
+		</div>
+	</form>
+}
+
+// fieldError is the message under the input it belongs to. It is a live region
+// so that a refusal announces itself: htmx swaps the panel in place, and
+// nothing else would tell a screen reader the page had changed.
+templ fieldError(f Field) {
+	if f.Error != "" {
+		<p class="field-error" role="alert">{ f.Error }</p>
+	}
+}
+
+// monthTable is what the log folds to for this month, and what that came to.
+// The rollup renders even when there are no rows: a month with nothing in it
+// spent nothing, and saying so beats an empty space.
+templ monthTable(p Panel) {
+	if len(p.Rows) == 0 {
+		<p class="muted empty">Nothing recorded for { p.Month } yet.</p>
+	} else {
+		<table class="cells">
+			<thead>
+				<tr>
+					<th scope="col">Type</th>
+					<th scope="col">Direction</th>
+					<th scope="col" class="amount">Amount</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, row := range p.Rows {
+					<tr>
+						<td>{ row.Type }</td>
+						<td class="direction">{ string(row.Direction) }</td>
+						<td class="amount">{ row.Amount.Display() }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+	<dl class="rollup">
+		<div>
+			<dt>Expenses</dt>
+			<dd class="amount">{ p.Rollup.Expenses.Display() }</dd>
+		</div>
+		<div>
+			<dt>Income</dt>
+			<dd class="amount">{ p.Rollup.Income.Display() }</dd>
+		</div>
+		<div class="net">
+			<dt>Net</dt>
+			<dd class="amount">{ p.Rollup.Net().Display() }</dd>
+		</div>
+	</dl>
+}
+
+// typeOptions is the type input's autocomplete: every type the log has
+// mentioned, newest use first, which is the order KnownTypes returns and the
+// order a datalist offers them in.
+templ typeOptions(known []projection.KnownType) {
+	<datalist id={ typesListID }>
+		for _, t := range known {
+			<option value={ t.Type }></option>
+		}
+	</datalist>
+}

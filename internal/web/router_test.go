@@ -12,20 +12,40 @@ import (
 	"testing"
 
 	"github.com/Zaba505/expense-tracker/internal/auth"
+	"github.com/Zaba505/expense-tracker/internal/eventlog"
 )
 
 // testOwnerEmail is the configured allowlisted account in router tests.
 const testOwnerEmail = "owner@example.com"
 
-// stubChecker stands in for the event store: the routing tests care that
-// a dependency was consulted, not which one.
-type stubChecker struct {
+// stubStore stands in for the Firestore-backed event store: a real in-memory
+// log, plus a readiness check the test scripts.
+//
+// The log half is not a mock. eventlog.Memory enforces what Firestore enforces
+// — the same defaults, the same refusals, the same load order — so a handler
+// test that appends an event and folds it back is exercising the append path
+// the app really runs, and an entry Memory accepts here is one Firestore
+// accepts in production. Only Check is stubbed, because "is the database
+// reachable" is the one question an in-memory log cannot answer.
+type stubStore struct {
+	*eventlog.Memory
+
+	// err is what Check answers with, and check overrides it when a test needs
+	// to inspect the context the probe hands it.
 	err    error
+	check  func(context.Context) error
 	called int
 }
 
-func (s *stubChecker) Check(context.Context) error {
+func newStubStore() *stubStore {
+	return &stubStore{Memory: eventlog.NewMemory()}
+}
+
+func (s *stubStore) Check(ctx context.Context) error {
 	s.called++
+	if s.check != nil {
+		return s.check(ctx)
+	}
 	return s.err
 }
 
@@ -70,7 +90,7 @@ func (s *stubAuth) LogoutHandler() http.Handler {
 // testHandler is the real routing table, with logs thrown away and a
 // dependency that is always healthy.
 func testHandler() http.Handler {
-	return NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, testAuthenticator())
+	return NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, testAuthenticator())
 }
 
 // testAuthenticator is a real Authenticator with a throwaway signing key
@@ -135,7 +155,9 @@ func TestLiveness(t *testing.T) {
 func TestLiveness_IgnoresDependencies(t *testing.T) {
 	t.Parallel()
 
-	store := &stubChecker{err: errors.New("firestore is down")}
+	store := newStubStore()
+	store.err = errors.New("firestore is down")
+
 	rec := httptest.NewRecorder()
 	NewHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, testAuthenticator()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, livenessPath, nil))
@@ -193,7 +215,7 @@ func TestHome_OwnerSession(t *testing.T) {
 		session:    auth.Session{Email: testOwnerEmail},
 		hasSession: true,
 	}
-	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), "/")
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/")
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET / status = %d, want %d", rec.Code, http.StatusOK)
@@ -213,7 +235,7 @@ func TestHome_NonOwnerSessionIsLoggedOut(t *testing.T) {
 		session:    auth.Session{Email: "other@example.com"},
 		hasSession: true,
 	}
-	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), "/")
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/")
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("GET / status = %d, want %d", rec.Code, http.StatusSeeOther)
@@ -255,7 +277,7 @@ func TestLogoutRouteIsMounted(t *testing.T) {
 		session:    auth.Session{Email: testOwnerEmail},
 		hasSession: true,
 	}
-	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), auth.LogoutPath)
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), auth.LogoutPath)
 
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("GET %s = %d, want %d", auth.LogoutPath, rec.Code, http.StatusSeeOther)
@@ -278,7 +300,7 @@ func TestUnknownPathIs404(t *testing.T) {
 		session:    auth.Session{Email: testOwnerEmail},
 		hasSession: true,
 	}
-	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn), "/no-such-page")
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/no-such-page")
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("GET /no-such-page status = %d, want %d", rec.Code, http.StatusNotFound)
@@ -326,7 +348,7 @@ func TestHomeAssetsAreServed(t *testing.T) {
 		session:    auth.Session{Email: testOwnerEmail},
 		hasSession: true,
 	}
-	handler := NewHandler(slog.New(slog.DiscardHandler), &stubChecker{}, testOwnerEmail, authn)
+	handler := NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn)
 	home := getWithHandler(t, handler, "/").Body.String()
 
 	refs := assetRef.FindAllStringSubmatch(home, -1)
