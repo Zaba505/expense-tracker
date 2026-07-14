@@ -11,7 +11,9 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/money"
@@ -108,13 +110,16 @@ func New(ctx context.Context, opts Options) (*Store, error) {
 // Append writes e as a new document in the events collection and returns
 // it as stored. It implements EventStore.
 //
-// Immutability is structural rather than promised. The document ID is
-// generated here, so no caller can name a document to overwrite, and the
-// write is a Create rather than a Set: were an ID ever to collide,
-// Firestore would refuse the write instead of replacing what is there.
-// Nothing in this package issues an Update or a Delete against the
-// collection — the only way to change what the log says is to append to
-// it.
+// Immutability is structural rather than promised. The write is a Create
+// rather than a Set: were an ID ever to collide, Firestore would refuse
+// the write instead of replacing what is there. Nothing in this package
+// issues an Update or a Delete against the collection — the only way to
+// change what the log says is to append to it.
+//
+// The document ID is generated here, so a caller of this method cannot
+// name a document to overwrite. AppendUnique does let a caller name one,
+// and takes nothing away: Create is what refuses the overwrite, and it
+// refuses it whoever chose the name.
 //
 // That holds for callers who go through this package, which is every
 // caller in this binary. It is not yet enforced by the database: making
@@ -125,14 +130,58 @@ func (s *Store) Append(ctx context.Context, e domain.Event) (domain.Event, error
 	if err != nil {
 		return domain.Event{}, err
 	}
+	return s.create(ctx, s.events.NewDoc(), e)
+}
 
-	ref := s.events.NewDoc()
+// AppendUnique writes e as the document named by key, and reports
+// ErrDuplicateKey if that document is already there. It implements
+// UniqueAppender.
+//
+// The idempotence is Firestore's Create, and that is the whole design: the
+// key is the document's name, so "has this row been imported" is asked and
+// answered by the write itself, in one round trip that the database
+// serializes. An importer that instead read the collection and then wrote
+// what it did not find would have a window between the two — and a second
+// importer, a retry, or a resumed run landing in that window would append
+// a duplicate of a row that cannot be deleted afterwards.
+//
+// It also means the log needs no separate ledger of what has been
+// imported. A ledger is a second write, and a second write is a thing that
+// can fail on its own: a crash between the event and its bookkeeping would
+// leave a row that is in the log and not in the ledger, and the next run
+// would import it again. Here there is nothing to fall out of step with,
+// because the record of the import is the event.
+func (s *Store) AppendUnique(ctx context.Context, key string, e domain.Event) (domain.Event, error) {
+	e, err := prepareKeyed(key, e, time.Now)
+	if err != nil {
+		return domain.Event{}, err
+	}
+
+	e, err = s.create(ctx, s.events.Doc(key), e)
+	if status.Code(err) == codes.AlreadyExists {
+		return domain.Event{}, fmt.Errorf("%w: %s", ErrDuplicateKey, key)
+	}
+	return e, err
+}
+
+// create writes a prepared event to a named document, refusing to replace
+// one that is already there, and returns it with the document's ID on it.
+//
+// Both append paths go through it so that a Create can never quietly
+// become a Set: the difference between them is an overwrite, and an
+// overwrite is the one thing this log promises cannot happen.
+func (s *Store) create(ctx context.Context, ref *firestore.DocumentRef, e domain.Event) (domain.Event, error) {
 	if _, err := ref.Create(ctx, newEventDoc(e)); err != nil {
 		// As in Load: the gRPC status for a cancelled write says
 		// "Canceled" but does not unwrap to context.Canceled, and a caller
 		// that gave up needs to read differently from a database that
 		// fell over.
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		//
+		// AlreadyExists is checked by the caller rather than here, and on
+		// the wrapped error: cancelling a context does not make a duplicate
+		// key stop being a duplicate key, so the definite answer the server
+		// gave outranks the guess the context would offer.
+		if ctxErr := ctx.Err(); ctxErr != nil && status.Code(err) != codes.AlreadyExists {
 			return domain.Event{}, fmt.Errorf("eventlog: appending event: %w", ctxErr)
 		}
 		return domain.Event{}, fmt.Errorf("eventlog: appending event: %w", err)

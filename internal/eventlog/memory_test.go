@@ -1,6 +1,7 @@
 package eventlog_test
 
 import (
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -14,7 +15,7 @@ import (
 // — the emulator half needs a database and a build tag — so it is what
 // keeps the contract honest during ordinary work.
 func TestMemory(t *testing.T) {
-	runEventStoreConformance(t, func(t *testing.T) eventlog.EventStore {
+	runEventStoreConformance(t, func(t *testing.T) eventlog.UniqueAppender {
 		return eventlog.NewMemory()
 	})
 }
@@ -62,5 +63,63 @@ func TestMemory_ConcurrentAppend(t *testing.T) {
 	slices.Sort(ids)
 	if unique := slices.Compact(ids); len(unique) != appenders {
 		t.Errorf("the %d appends produced %d distinct IDs; two events sharing an ID are one event to everything downstream", appenders, len(unique))
+	}
+}
+
+// TestMemory_ConcurrentAppendUnique holds the keyed path to the promise
+// that makes it worth having: exactly one of the writers under a key wins,
+// and the rest are told the key is taken.
+//
+// Racing writers under one key are not a hypothetical the importer can
+// dismiss. A re-run started while the first run is still going, two
+// terminals, a retry that overlaps the request it is retrying — each of
+// them is two appends of the same row, and an append-only log has no way
+// to take the loser back. Firestore's Create decides the race in the
+// database; this is the same claim made of the store that stands in for it
+// in every test the importer has.
+func TestMemory_ConcurrentAppendUnique(t *testing.T) {
+	store := eventlog.NewMemory()
+
+	const (
+		appenders = 32
+		key       = "import-7d1f0c2a"
+	)
+
+	var (
+		wg         sync.WaitGroup
+		mu         sync.Mutex
+		appended   int
+		duplicates int
+	)
+	wg.Add(appenders)
+
+	for range appenders {
+		go func() {
+			defer wg.Done()
+
+			_, err := store.AppendUnique(t.Context(), key, event())
+
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				appended++
+			case errors.Is(err, eventlog.ErrDuplicateKey):
+				duplicates++
+			default:
+				t.Errorf("AppendUnique: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if appended != 1 {
+		t.Errorf("%d of %d racing appends under one key succeeded, want exactly 1", appended, appenders)
+	}
+	if duplicates != appenders-1 {
+		t.Errorf("%d appends were told the key was taken, want %d", duplicates, appenders-1)
+	}
+	if got := loadAll(t, store); len(got) != 1 {
+		t.Errorf("the log holds %d events, want 1 — a racing re-run duplicated a row that cannot be deleted", len(got))
 	}
 }

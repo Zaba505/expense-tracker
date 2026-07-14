@@ -12,4 +12,10 @@
 // Delete. Consumers depend on that interface rather than on Firestore,
 // which is what keeps the append-only rule from being something each
 // caller has to remember.
+//
+// UniqueAppender is EventStore plus one thing: an append that carries the
+// caller's own key for the fact it is appending, and refuses to append the
+// same fact twice. It is a second interface because it has exactly one
+// caller — the importer, replaying a spreadsheet it may have replayed
+// before — and a handler that never gets handed it can never reach for it.
 package eventlog
