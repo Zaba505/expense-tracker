@@ -21,6 +21,7 @@ import (
 const (
 	LoginPath    = "/auth/login"
 	CallbackPath = "/auth/callback"
+	LogoutPath   = "/logout"
 )
 
 // googleIssuer is the "iss" every Google ID token carries, and what the
@@ -304,6 +305,15 @@ func (a *Authenticator) CallbackHandler() http.Handler {
 		// and a 303 is what stops it sitting in the address bar to be
 		// reloaded — the browser follows with a fresh GET of "/".
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+	})
+}
+
+// LogoutHandler ends the browser's session by clearing the session cookie and
+// sending it back to the start of the sign-in flow.
+func (a *Authenticator) LogoutHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.ClearSession(w, r)
+		http.Redirect(w, r, LoginPath, http.StatusSeeOther)
 	})
 }
 

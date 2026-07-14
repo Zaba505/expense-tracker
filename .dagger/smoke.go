@@ -33,10 +33,12 @@ const (
 	smokePort = 9090
 
 	// The app requires all of these to boot. Against an emulator the
-	// project id only namespaces the data, and nothing enforces the owner
-	// until the auth stories land.
+	// project id only namespaces the data. OWNER_EMAIL is enforced by the
+	// shared authorization middleware, so the smoke test uses the same
+	// configured owner address the app itself expects.
 	smokeProject    = "smoke-expense-tracker"
 	smokeOwnerEmail = "owner@example.com"
+	smokeLoginPath  = "/auth/login"
 
 	// Google Sign-In credentials the app will never get to use: no browser
 	// completes a flow here, and the app makes no network call with them
@@ -56,12 +58,13 @@ const (
 )
 
 // smokeCheck is one request the running image has to answer, and the reason
-// it is worth making. Body is a substring the response must contain; empty
-// means any non-empty body will do.
+// it is worth making. Body and location are substrings the response must
+// contain when set; empty means the field is not asserted.
 type smokeCheck struct {
-	path   string
-	status int
-	body   string
+	path     string
+	status   int
+	body     string
+	location string
 
 	// proves is what a failure of this check would mean. It is not
 	// decoration: it is the difference between "the smoke test is red" and
@@ -88,19 +91,23 @@ var smokeChecks = []smokeCheck{
 		proves: "the container can reach its database",
 	},
 	{
-		path: "/static/app.css", status: http.StatusOK,
-		// There is no static/ directory in the image; there is no directory
-		// at all. This 200 can only have come from the go:embed inside the
-		// binary. An app that had drifted back to reading assets off disk
-		// would 404 here and nowhere else.
-		proves: "the front-end assets are embedded, not read from disk",
+		path: "/static/app.css",
+		// Protected like every other app route: an anonymous caller should be
+		// bounced to sign in before any asset is served.
+		status:   http.StatusSeeOther,
+		location: smokeLoginPath,
+		proves:   "the authorization middleware protects static assets too",
 	},
 	{
-		path: "/", status: http.StatusOK, body: "<!doctype html>",
-		proves: "the templ-rendered home page is served",
+		path:     "/",
+		status:   http.StatusSeeOther,
+		location: smokeLoginPath,
+		proves:   "the home page is behind the owner-only authorization gate",
 	},
 	{
-		path: "/auth/login", status: http.StatusFound, body: "accounts.google.com",
+		path:     smokeLoginPath,
+		status:   http.StatusFound,
+		location: "accounts.google.com",
 		// A 302 at Google means the app read OAUTH_CLIENT_ID and SESSION_KEY
 		// out of its environment and built an authorization URL from them.
 		// The container would not have started at all if they were missing,
@@ -112,8 +119,8 @@ var smokeChecks = []smokeCheck{
 
 // ImageSmokeTest starts the scratch image that `server-image` builds — the
 // exact artifact CI publishes — with a Firestore emulator behind it, and
-// checks that the running container serves liveness, readiness, the
-// embedded assets, and the home page on $PORT.
+// checks that the running container serves liveness, readiness, redirects
+// protected routes to sign in, and mounts the sign-in flow on $PORT.
 //
 // It is the only thing that tests the deployable rather than the source,
 // which is why CI runs it as its own leg.
@@ -204,7 +211,7 @@ func waitForBoot(ctx context.Context, client *http.Client, endpoint string) erro
 	deadline := time.Now().Add(smokeBoot)
 	var last error
 	for {
-		status, _, err := get(ctx, client, endpoint+"/health/liveness")
+		status, _, _, err := get(ctx, client, endpoint+"/health/liveness")
 		switch {
 		case err != nil:
 			last = err
@@ -229,13 +236,17 @@ func waitForBoot(ctx context.Context, client *http.Client, endpoint string) erro
 // run makes the check's request and reports what a mismatch means, so the
 // failure names the property that broke rather than a status code.
 func (c smokeCheck) run(ctx context.Context, client *http.Client, endpoint string) error {
-	status, body, err := get(ctx, client, endpoint+c.path)
+	status, header, body, err := get(ctx, client, endpoint+c.path)
 	if err != nil {
 		return fmt.Errorf("GET %s (%s): %w", c.path, c.proves, err)
 	}
 	if status != c.status {
 		return fmt.Errorf("GET %s: got %d, want %d — no longer true of this image: %s (body: %s)",
 			c.path, status, c.status, c.proves, truncate(body))
+	}
+	if c.location != "" && !strings.Contains(header.Get("Location"), c.location) {
+		return fmt.Errorf("GET %s: redirect location %q does not contain %q — no longer true of this image: %s",
+			c.path, header.Get("Location"), c.location, c.proves)
 	}
 	if body == "" {
 		return fmt.Errorf("GET %s: %d, but the body is empty — no longer true of this image: %s",
@@ -251,22 +262,22 @@ func (c smokeCheck) run(ctx context.Context, client *http.Client, endpoint strin
 // get performs one GET and reads the body, which is bounded: these are
 // health probes and a stylesheet, and a response that is not one of those
 // should not be able to exhaust this process's memory to say so.
-func get(ctx context.Context, client *http.Client, url string) (int, string, error) {
+func get(ctx context.Context, client *http.Client, url string) (int, http.Header, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, "", fmt.Errorf("build request: %w", err)
+		return 0, nil, "", fmt.Errorf("build request: %w", err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, "", err
+		return 0, nil, "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return resp.StatusCode, "", fmt.Errorf("read body: %w", err)
+		return resp.StatusCode, resp.Header.Clone(), "", fmt.Errorf("read body: %w", err)
 	}
-	return resp.StatusCode, string(body), nil
+	return resp.StatusCode, resp.Header.Clone(), string(body), nil
 }
 
 // truncate keeps a failure message readable when the body is a whole HTML

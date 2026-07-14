@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+const (
+	healthzPath   = "/healthz"
+	livenessPath  = "/health/liveness"
+	readinessPath = "/health/readiness"
+)
+
 // ReadinessTimeout bounds the dependency check behind GET
 // /health/readiness. An unreachable Firestore fails by hanging rather
 // than by refusing, so without a deadline a probe would wait as long as

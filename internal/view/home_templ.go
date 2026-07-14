@@ -14,10 +14,9 @@ import "github.com/Zaba505/expense-tracker/internal/auth"
 // the layout, and the embedded assets are wired together end to end.
 // The month view that replaces it arrives with the entry stories.
 //
-// signedInAs is the email of the account signed in, or empty when nobody
-// is. The page renders either way and protects nothing — the middleware
-// that turns a session into access is #14 — so this shows the session
-// rather than enforcing it.
+// signedInAs is the email of the account signed in. The shared middleware
+// already enforced access before the page rendered, so this shows which
+// owner session got in rather than deciding who may.
 func Home(signedInAs string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -63,7 +62,7 @@ func Home(signedInAs string) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(signedInAs)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/home.templ`, Line: 21, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/home.templ`, Line: 20, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -81,7 +80,7 @@ func Home(signedInAs string) templ.Component {
 				var templ_7745c5c3_Var4 templ.SafeURL
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(auth.LoginPath))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/home.templ`, Line: 24, Col: 59}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/view/home.templ`, Line: 23, Col: 59}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {

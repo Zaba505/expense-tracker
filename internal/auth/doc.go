@@ -28,6 +28,6 @@
 // This package authenticates; it does not authorize. It will hand a
 // session to any Google account with a verified email, because knowing who
 // somebody is and deciding whether they may use the app are separate
-// questions. The owner allowlist and the middleware that turns a session
-// into access are the next story (#14); until then no route requires one.
+// questions. internal/web is the package that turns a session into access
+// by comparing its email with OWNER_EMAIL.
 package auth

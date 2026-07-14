@@ -6,10 +6,9 @@ import "github.com/Zaba505/expense-tracker/internal/auth"
 // the layout, and the embedded assets are wired together end to end.
 // The month view that replaces it arrives with the entry stories.
 //
-// signedInAs is the email of the account signed in, or empty when nobody
-// is. The page renders either way and protects nothing — the middleware
-// that turns a session into access is #14 — so this shows the session
-// rather than enforcing it.
+// signedInAs is the email of the account signed in. The shared middleware
+// already enforced access before the page rendered, so this shows which
+// owner session got in rather than deciding who may.
 templ Home(signedInAs string) {
 	@Layout("expense-tracker") {
 		<section class="card">

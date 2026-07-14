@@ -42,7 +42,7 @@ const (
 // have to look up.
 type Session struct {
 	// Email is the Google account's verified email address. It is the
-	// identity the app cares about: the owner allowlist (#14) compares
+	// identity the app cares about: the owner allowlist compares
 	// against it.
 	Email string `json:"email"`
 
@@ -184,8 +184,8 @@ func (a *Authenticator) setSession(w http.ResponseWriter, r *http.Request, s Ses
 // cookie that is absent, malformed, unsigned, signed with a key that is
 // not ours, or expired all answer the same way: no session.
 //
-// It is the read side of the login flow, and what the middleware in #14
-// will be built on.
+// It is the read side of the login flow, and what the authorization
+// middleware is built on.
 func (a *Authenticator) Session(r *http.Request) (Session, bool) {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
@@ -200,6 +200,16 @@ func (a *Authenticator) Session(r *http.Request) (Session, bool) {
 		return Session{}, false
 	}
 	return s, true
+}
+
+// ClearSession removes the session cookie from the browser.
+func (a *Authenticator) ClearSession(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, a.cookie(r, &http.Cookie{
+		Name:   sessionCookie,
+		Value:  "",
+		Path:   "/",
+		MaxAge: -1,
+	}))
 }
 
 // setLoginFlow stashes the state and nonce for the trip to Google.

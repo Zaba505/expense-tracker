@@ -13,11 +13,10 @@ import (
 // test can exercise the real routing table with httptest and no listener.
 //
 // store backs the readiness probe; it is the app's one hard dependency.
-// authn serves the Google Sign-In flow and reads the sessions it hands
-// out. No route requires one yet — the middleware that enforces the owner
-// allowlist is #14 — so what a session buys today is the home page knowing
-// your name.
-func NewHandler(logger *slog.Logger, store Checker, authn *auth.Authenticator) http.Handler {
+// ownerEmail is the one Google account allowed past the authorization
+// middleware. authn serves the Google Sign-In flow and reads the sessions it
+// hands out.
+func NewHandler(logger *slog.Logger, store Checker, ownerEmail string, authn authenticator) http.Handler {
 	mux := http.NewServeMux()
 
 	// "/{$}" matches only the root path; a bare "/" would make the home
@@ -29,6 +28,7 @@ func NewHandler(logger *slog.Logger, store Checker, authn *auth.Authenticator) h
 	// Both are GETs, because both are navigations.
 	mux.Handle("GET "+auth.LoginPath, authn.LoginHandler())
 	mux.Handle("GET "+auth.CallbackPath, authn.CallbackHandler())
+	mux.Handle("GET "+auth.LogoutPath, authn.LogoutHandler())
 
 	// Two probes, because they answer different questions and the platform
 	// does different things with the answers: liveness says the process is
@@ -36,19 +36,19 @@ func NewHandler(logger *slog.Logger, store Checker, authn *auth.Authenticator) h
 	// process can serve (fail it and Cloud Run just holds traffic back).
 	// Folding Firestore into liveness would turn a database blip into a
 	// restart loop.
-	mux.HandleFunc("GET /health/liveness", handleLiveness)
-	mux.Handle("GET /health/readiness", handleReadiness(logger, store))
+	mux.HandleFunc("GET "+healthzPath, handleLiveness)
+	mux.HandleFunc("GET "+livenessPath, handleLiveness)
+	mux.Handle("GET "+readinessPath, handleReadiness(logger, store))
 
 	mux.Handle("GET "+view.AssetPrefix, view.AssetHandler())
 
-	return logRequests(logger, mux)
+	return logRequests(logger, requireOwner(logger, ownerEmail, authn, mux))
 }
 
-// handleHome renders the home page, told who is looking at it. The page is
-// public — this is not an access check, and there is nothing here yet to
-// protect — but rendering the signed-in email is what makes a session
-// something you can see rather than something you have to take on faith.
-func handleHome(logger *slog.Logger, authn *auth.Authenticator) http.HandlerFunc {
+// handleHome renders the home page, told who is looking at it. Authorization
+// already happened in the shared middleware, so the only job here is to render
+// the page and show which account made it through.
+func handleHome(logger *slog.Logger, authn authenticator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var email string
 		if session, ok := authn.Session(r); ok {
