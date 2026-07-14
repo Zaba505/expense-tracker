@@ -110,7 +110,7 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 	// read is an honest 500 — unlike the render below, which cannot be.
 	panel, err := loadPanel(r.Context(), log, month, view.NewForm(month))
 	if err != nil {
-		logger.ErrorContext(r.Context(), "folding the log for the home page",
+		logger.ErrorContext(r.Context(), "folding the log for the month page",
 			slog.String("month", month),
 			slog.Any("error", err),
 		)
@@ -124,7 +124,7 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 	// http.Error would only append its text to a half-written document.
 	// A truncated page the log explains beats a lie about it being whole.
 	if err := view.Home(email, panel).Render(r.Context(), w); err != nil {
-		logger.ErrorContext(r.Context(), "rendering the home page",
+		logger.ErrorContext(r.Context(), "rendering the month page",
 			slog.Any("error", err),
 		)
 	}
