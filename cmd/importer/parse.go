@@ -81,11 +81,11 @@ func parseCSV(r io.Reader) ([]domain.Event, error) {
 			}
 			return nil, fmt.Errorf("importer: read row %d: %w", rowNumber, err)
 		}
-		if blank(record) {
+		if isBlankRecord(record) {
 			continue
 		}
 
-		month, recordedAt, err := parseMonth(field(record, monthColumn))
+		month, recordedAt, err := parseMonth(safeGetField(record, monthColumn))
 		if err != nil {
 			return nil, &cellError{
 				Row:    rowNumber,
@@ -100,7 +100,7 @@ func parseCSV(r io.Reader) ([]domain.Event, error) {
 				continue
 			}
 
-			value := strings.TrimSpace(field(record, columnNumber))
+			value := strings.TrimSpace(safeGetField(record, columnNumber))
 			if value == "" {
 				continue
 			}
@@ -153,14 +153,14 @@ func parseMonth(value string) (string, time.Time, error) {
 	return "", time.Time{}, fmt.Errorf("invalid month %q", value)
 }
 
-func field(record []string, index int) string {
+func safeGetField(record []string, index int) string {
 	if index >= len(record) {
 		return ""
 	}
 	return record[index]
 }
 
-func blank(record []string) bool {
+func isBlankRecord(record []string) bool {
 	for _, field := range record {
 		if strings.TrimSpace(field) != "" {
 			return false
