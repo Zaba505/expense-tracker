@@ -36,11 +36,16 @@ type Store interface {
 // the authorization middleware. authn serves the Google Sign-In flow and reads
 // the sessions it hands out.
 func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authenticator) http.Handler {
+	return newHandler(logger, store, ownerEmail, authn, time.Now)
+}
+
+func newHandler(logger *slog.Logger, store Store, ownerEmail string, authn authenticator, now func() time.Time) http.Handler {
 	mux := http.NewServeMux()
 
 	// "/{$}" matches only the root path; a bare "/" would make the home
 	// page a catch-all and swallow every 404.
-	mux.Handle("GET /{$}", handleHome(logger, store, authn))
+	mux.Handle("GET /{$}", handleHome(logger, store, authn, now))
+	mux.Handle("GET "+view.MonthJumpPath, handleMonthJump(logger, store, authn))
 	mux.Handle("GET /month/{month}", handleMonth(logger, store, authn))
 	mux.Handle("GET /reports/{year}", handleReport(logger, store, authn))
 
@@ -74,13 +79,50 @@ func NewHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 // looking at it. Authorization already happened in the shared middleware, so
 // the only jobs here are to fold the log and render it.
 //
-// The month is the current one in UTC, because the log's months are UTC's (see
-// domain.Month). An owner in the Americas opening the page late on the 31st is
-// shown next month for those few hours — and picks the month they meant in the
-// form, which is the same field they would use to record last March.
-func handleHome(logger *slog.Logger, log eventlog.EventStore, authn authenticator) http.HandlerFunc {
+// The landing month is the current UTC month when it has activity, or — if it
+// does not — the most recent month the log has activity for. An empty log still
+// lands on the current month, ready for the first entry.
+func handleHome(logger *slog.Logger, log eventlog.EventStore, authn authenticator, now func() time.Time) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		month := domain.Month(time.Now())
+		events, state, err := loadState(r.Context(), log)
+		if err != nil {
+			logger.ErrorContext(r.Context(), "loading the default landing month",
+				slog.Any("error", err),
+			)
+			http.Error(w, "the expenses could not be loaded", http.StatusInternalServerError)
+			return
+		}
+
+		month := defaultMonth(now(), events)
+		panel, err := panelFromState(events, state, month, formFromRequest(r, month))
+		if err != nil {
+			logger.ErrorContext(r.Context(), "folding the log for the month page",
+				slog.String("month", month),
+				slog.Any("error", err),
+			)
+			http.Error(w, "the expenses could not be loaded", http.StatusInternalServerError)
+			return
+		}
+
+		renderHomePage(w, r, logger, authn, panel)
+	}
+}
+
+func handleMonthJump(logger *slog.Logger, log eventlog.EventStore, authn authenticator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		month := strings.TrimSpace(r.URL.Query().Get("month"))
+		if !domain.ValidMonth(month) {
+			http.NotFound(w, r)
+			return
+		}
+
+		path := view.MonthPath(month)
+		if !isHTMXRequest(r) {
+			http.Redirect(w, r, path, http.StatusSeeOther)
+			return
+		}
+
+		w.Header().Set("HX-Push-Url", path)
 		renderMonthPage(w, r, logger, log, authn, month, formFromRequest(r, month))
 	}
 }
@@ -104,11 +146,6 @@ func handleMonth(logger *slog.Logger, log eventlog.EventStore, authn authenticat
 }
 
 func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, log eventlog.EventStore, authn authenticator, month string, form view.Form) {
-	var email string
-	if session, ok := authn.Session(r); ok {
-		email = session.Email
-	}
-
 	// The fold happens before a byte is written, so a log that cannot be
 	// read is an honest 500 — unlike the render below, which cannot be.
 	panel, err := loadPanel(r.Context(), log, month, form)
@@ -121,6 +158,20 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 		return
 	}
 
+	if isHTMXRequest(r) {
+		renderPanel(w, r, logger, panel, http.StatusOK)
+		return
+	}
+
+	renderHomePage(w, r, logger, authn, panel)
+}
+
+func renderHomePage(w http.ResponseWriter, r *http.Request, logger *slog.Logger, authn authenticator, panel view.Panel) {
+	var email string
+	if session, ok := authn.Session(r); ok {
+		email = session.Email
+	}
+
 	// Logged, not answered with a 500: templ streams straight to the
 	// ResponseWriter, so by the time a render can fail the status line
 	// and part of the page are already on their way to the browser, and
@@ -131,6 +182,28 @@ func renderMonthPage(w http.ResponseWriter, r *http.Request, logger *slog.Logger
 			slog.Any("error", err),
 		)
 	}
+}
+
+func defaultMonth(now time.Time, events []domain.Event) string {
+	current := domain.Month(now)
+	if len(events) == 0 {
+		return current
+	}
+
+	latest := events[0].Month
+	for _, event := range events {
+		if event.Month == current {
+			return current
+		}
+		if event.Month > latest {
+			latest = event.Month
+		}
+	}
+	return latest
+}
+
+func isHTMXRequest(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("HX-Request"), "true")
 }
 
 func formFromRequest(r *http.Request, month string) view.Form {

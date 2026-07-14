@@ -36,6 +36,10 @@ func loadPanel(ctx context.Context, log eventlog.EventStore, month string, form 
 		return view.Panel{}, err
 	}
 
+	return panelFromState(events, state, month, form)
+}
+
+func panelFromState(events []domain.Event, state projection.State, month string, form view.Form) (view.Panel, error) {
 	rollups, err := projection.RollupByMonth(state)
 	if err != nil {
 		return view.Panel{}, fmt.Errorf("rolling up the log: %w", err)

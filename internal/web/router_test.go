@@ -10,11 +10,13 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Zaba505/expense-tracker/internal/auth"
 	"github.com/Zaba505/expense-tracker/internal/domain"
 	"github.com/Zaba505/expense-tracker/internal/eventlog"
 	"github.com/Zaba505/expense-tracker/internal/money"
+	"github.com/Zaba505/expense-tracker/internal/view"
 )
 
 // testOwnerEmail is the configured allowlisted account in router tests.
@@ -230,6 +232,71 @@ func TestHome_OwnerSession(t *testing.T) {
 	}
 }
 
+func TestHome_DefaultLandingMonth(t *testing.T) {
+	tests := map[string]struct {
+		now   string
+		seed  []domain.Event
+		want  string
+		avoid string
+	}{
+		"empty log lands on the current month": {
+			now:  "2026-07",
+			want: "2026-07",
+		},
+		"most recent activity wins when the current month is empty": {
+			now: "2026-07",
+			seed: []domain.Event{
+				{Action: domain.ActionAdd, Month: "2026-05", Type: "Rent", Amount: money.Cents(40_00), Direction: domain.DirectionExpense},
+				{Action: domain.ActionAdd, Month: "2026-06", Type: "Groceries", Amount: money.Cents(10_00), Direction: domain.DirectionExpense},
+			},
+			want:  "2026-06",
+			avoid: "2026-07",
+		},
+		"current month stays the landing month when it has activity": {
+			now: "2026-07",
+			seed: []domain.Event{
+				{Action: domain.ActionAdd, Month: "2026-06", Type: "Rent", Amount: money.Cents(40_00), Direction: domain.DirectionExpense},
+				{Action: domain.ActionAdd, Month: "2026-07", Type: "Groceries", Amount: money.Cents(10_00), Direction: domain.DirectionExpense},
+			},
+			want:  "2026-07",
+			avoid: "2026-06",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := newStubStore()
+			for _, event := range tt.seed {
+				if _, err := store.Append(t.Context(), event); err != nil {
+					t.Fatalf("seeding the log with %+v: %v", event, err)
+				}
+			}
+
+			authn := &stubAuth{
+				session:    auth.Session{Email: testOwnerEmail},
+				hasSession: true,
+			}
+			clockTime, err := time.Parse("2006-01", tt.now)
+			if err != nil {
+				t.Fatalf("parsing test month %q: %v", tt.now, err)
+			}
+
+			rec := getWithHandler(t, newHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, authn, func() time.Time { return clockTime }), "/")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET / status = %d, want %d", rec.Code, http.StatusOK)
+			}
+
+			body := rec.Body.String()
+			if !strings.Contains(body, "<h2>"+tt.want+"</h2>") {
+				t.Fatalf("GET / body does not land on %s:\n%s", tt.want, body)
+			}
+			if tt.avoid != "" && strings.Contains(body, "<h2>"+tt.avoid+"</h2>") {
+				t.Fatalf("GET / body landed on %s, do not want that month:\n%s", tt.avoid, body)
+			}
+		})
+	}
+}
+
 func TestMonthView_RendersTheRequestedProjection(t *testing.T) {
 	t.Parallel()
 
@@ -298,6 +365,64 @@ func TestMonthView_EmptyMonthRendersAReadyForm(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("GET /month/2026-10 body does not contain %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestMonthView_RendersMonthNavigation(t *testing.T) {
+	t.Parallel()
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := getWithHandler(t, NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn), "/month/2026-07")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /month/2026-07 status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`href="/month/2026-06"`,
+		`hx-get="/month/2026-06"`,
+		`href="/month/2026-08"`,
+		`hx-get="/month/2026-08"`,
+		`hx-push-url="true"`,
+		`action="/month"`,
+		`name="month" value="2026-07"`,
+		">Go</button>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /month/2026-07 body does not contain %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestMonthJump_HTMXReturnsJustThePanelAndCanonicalURL(t *testing.T) {
+	t.Parallel()
+
+	authn := &stubAuth{
+		session:    auth.Session{Email: testOwnerEmail},
+		hasSession: true,
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/month?month=2026-08", nil)
+	req.Header.Set("HX-Request", "true")
+
+	NewHandler(slog.New(slog.DiscardHandler), newStubStore(), testOwnerEmail, authn).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /month?month=2026-08 status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("HX-Push-Url"); got != "/month/2026-08" {
+		t.Fatalf("GET /month?month=2026-08 HX-Push-Url = %q, want %q", got, "/month/2026-08")
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "<!doctype html>") {
+		t.Fatalf("GET /month?month=2026-08 returned a full document, want only the panel:\n%s", body)
+	}
+	if !strings.Contains(body, `<section id="`+view.PanelID+`"`) || !strings.Contains(body, "<h2>2026-08</h2>") {
+		t.Fatalf("GET /month?month=2026-08 did not return the requested month panel:\n%s", body)
 	}
 }
 
