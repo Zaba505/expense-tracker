@@ -49,6 +49,13 @@ func newHandler(logger *slog.Logger, store Store, ownerEmail string, authn authe
 	mux.Handle("GET /month/{month}", handleMonth(logger, store, authn))
 	mux.Handle("GET /reports/{year}", handleReport(logger, store, authn))
 
+	// Mounted on the literal view.TrendsPath ("/reports/types"), which is the
+	// more specific pattern and so wins over "/reports/{year}" above rather than
+	// conflicting with it. The year handler would 404 it anyway — "types" is not
+	// a year — but the precedence is what makes the trend reachable at all, and
+	// it is decided by the mux, not by the order these two lines are written in.
+	mux.Handle("GET "+view.TrendsPath, handleTrend(logger, store, authn))
+
 	// The entry form's hx-post uses view.EntriesPath, so this route is mounted
 	// on that same shared constant and cannot drift from the markup.
 	mux.Handle("POST "+view.EntriesPath, handleEntry(logger, store))

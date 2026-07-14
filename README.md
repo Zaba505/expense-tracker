@@ -117,6 +117,7 @@ container is self-contained.
 | ------------------------- | --------------------------------------------------------- |
 | `GET /`                   | the home page (a placeholder until the entry stories land) |
 | `GET /reports/{year}`     | the yearly grid: month rows, type columns, live rollups    |
+| `GET /reports/types?type=`| one type's trend: every month of the log's range, min/max/average, gaps where the log is silent |
 | `GET /health/liveness`    | `200 ok`                                                   |
 | `GET /health/readiness`   | `200` / `503` + JSON, after a Firestore round-trip         |
 | `GET /static/`            | the embedded htmx + CSS                                    |

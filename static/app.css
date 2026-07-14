@@ -350,6 +350,27 @@ a {
   font-weight: 700;
 }
 
+/* One type's trend across the log's full range. */
+
+.trend-note {
+  margin: 0;
+}
+
+/* A gap is a month the log says nothing about, and it is muted rather than
+   rendered as an amount because it is not one — see projection.TrendMonth. A
+   real $0.00 sits in the same column at full contrast, and the two must not
+   look alike. */
+.trend-grid .gap {
+  color: var(--muted);
+}
+
+/* Only the first footer row opens the summary block; the rest sit under it as
+   one group, rather than each being ruled off from the last. */
+.trend-grid tfoot tr:not(:first-child) th,
+.trend-grid tfoot tr:not(:first-child) td {
+  border-top: none;
+}
+
 /* The rename preview: what a retroactive rename would do to the cells it
    moves, and the conflict that stops it from being applied. */
 
