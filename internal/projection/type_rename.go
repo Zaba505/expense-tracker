@@ -27,7 +27,7 @@ type TypeRenameMonth struct {
 
 type typeAliases map[string]string
 
-func compileHistory(events []domain.Event) ([]domain.Event, typeAliases, error) {
+func canonicalizeHistory(events []domain.Event) ([]domain.Event, typeAliases, error) {
 	aliases, err := collectTypeAliases(events)
 	if err != nil {
 		return nil, nil, err
@@ -82,6 +82,9 @@ func canonicalEvents(events []domain.Event, aliases typeAliases) ([]domain.Event
 	return canonical, aliases, nil
 }
 
+// resolve follows a type's alias chain to the current canonical name and caches
+// the result back onto every intermediate alias it passed through, so repeated
+// lookups do not have to traverse the same chain again.
 func (aliases typeAliases) resolve(typ string) string {
 	typ = strings.TrimSpace(typ)
 	if typ == "" {
@@ -112,7 +115,7 @@ func (aliases typeAliases) resolve(typ string) string {
 // PreviewTypeRename reports which current months and entries would be affected
 // if the source type were renamed or merged into the target type.
 func PreviewTypeRename(events []domain.Event, fromType, toType string) (TypeRenamePreview, error) {
-	canonical, aliases, err := compileHistory(events)
+	canonical, aliases, err := canonicalizeHistory(events)
 	if err != nil {
 		return TypeRenamePreview{}, err
 	}

@@ -16,7 +16,7 @@ type KnownType struct {
 // must pass events already in log order. The result is newest first, and each
 // type appears once with the Month from its last event.
 func KnownTypes(events []domain.Event) []KnownType {
-	canonical, _, err := compileHistory(events)
+	canonical, _, err := canonicalizeHistory(events)
 	if err != nil {
 		return nil
 	}

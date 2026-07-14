@@ -107,7 +107,7 @@ func keyOf(e domain.Event) Key {
 // as trustworthy as the keys it is built from.
 func Fold(events []domain.Event) (State, error) {
 	state := make(State)
-	canonical, _, err := compileHistory(events)
+	canonical, _, err := canonicalizeHistory(events)
 	if err != nil {
 		return nil, err
 	}
