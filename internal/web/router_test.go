@@ -234,10 +234,10 @@ func TestHome_OwnerSession(t *testing.T) {
 
 func TestHome_DefaultLandingMonth(t *testing.T) {
 	tests := map[string]struct {
-		now    string
-		seed   []domain.Event
-		want   string
-		avoid  string
+		now   string
+		seed  []domain.Event
+		want  string
+		avoid string
 	}{
 		"empty log lands on the current month": {
 			now:  "2026-07",
