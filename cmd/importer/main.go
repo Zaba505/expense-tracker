@@ -1,8 +1,8 @@
 // Command importer translates the owner's exported expense spreadsheet
 // into an event stream appended to the event log.
 //
-// At this scaffolding stage it is a no-op entry point; the CSV parser and
-// event-emission logic are added by a later story (`story(import)`).
+// At this stage the entry point is still a no-op; the CSV parser now exists,
+// and appending the translated events is wired by a later story.
 package main
 
 import (
