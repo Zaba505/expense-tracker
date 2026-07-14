@@ -276,12 +276,12 @@ func TestHome_DefaultLandingMonth(t *testing.T) {
 				session:    auth.Session{Email: testOwnerEmail},
 				hasSession: true,
 			}
-			now, err := time.Parse("2006-01", tt.now)
+			clockTime, err := time.Parse("2006-01", tt.now)
 			if err != nil {
 				t.Fatalf("parsing test month %q: %v", tt.now, err)
 			}
 
-			rec := getWithHandler(t, newHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, authn, func() time.Time { return now }), "/")
+			rec := getWithHandler(t, newHandler(slog.New(slog.DiscardHandler), store, testOwnerEmail, authn, func() time.Time { return clockTime }), "/")
 			if rec.Code != http.StatusOK {
 				t.Fatalf("GET / status = %d, want %d", rec.Code, http.StatusOK)
 			}
