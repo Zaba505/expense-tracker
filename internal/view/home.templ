@@ -2,6 +2,19 @@ package view
 
 import "github.com/Zaba505/expense-tracker/internal/auth"
 
+templ sessionBanner(signedInAs string) {
+	if signedInAs != "" {
+		<p class="muted signed-in">
+			Signed in as <strong>{ signedInAs }</strong>.
+			<a href={ templ.SafeURL(auth.LogoutPath) }>Sign out</a>
+		</p>
+	} else {
+		<p>
+			<a class="button" href={ templ.SafeURL(auth.LoginPath) }>Sign in with Google</a>
+		</p>
+	}
+}
+
 // Home is the landing page: the month panel — the entry form, the month it
 // writes into, and what that month came to — under a line saying who is
 // signed in.
@@ -16,16 +29,7 @@ import "github.com/Zaba505/expense-tracker/internal/auth"
 // owner session got in rather than deciding who may.
 templ Home(signedInAs string, panel Panel) {
 	@Layout("expense-tracker") {
-		if signedInAs != "" {
-			<p class="muted signed-in">
-				Signed in as <strong>{ signedInAs }</strong>.
-				<a href={ templ.SafeURL(auth.LogoutPath) }>Sign out</a>
-			</p>
-		} else {
-			<p>
-				<a class="button" href={ templ.SafeURL(auth.LoginPath) }>Sign in with Google</a>
-			</p>
-		}
+		@sessionBanner(signedInAs)
 		@MonthPanel(panel)
 	}
 }
