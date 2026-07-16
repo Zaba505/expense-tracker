@@ -135,6 +135,26 @@ a {
   justify-content: end;
 }
 
+/* The form dims while an entry is in flight, so a save that has left the page
+   but not yet come back reads as pending rather than as nothing happening. htmx
+   carries the .htmx-request class for the life of the post and no longer, so the
+   state clears itself: on success the whole panel is swapped away, and on a
+   refusal the form returns without it. No script keeps this in sync — the class
+   is the request, and the request is the only thing that is pending. */
+.entry.htmx-request {
+  opacity: 0.6;
+}
+
+/* The "Saving…" cue beside Record. It rides htmx's own .htmx-indicator, which
+   is invisible until the class above is present, so it shows for exactly the
+   post it describes. */
+.saving {
+  align-self: end;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
 .field > label,
 .field > legend {
   padding: 0;

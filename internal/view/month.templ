@@ -62,12 +62,29 @@ templ MonthPanel(p Panel) {
 // the radio values are domain.Direction, the options are domain.Action — so
 // nothing has to be translated between what the form says and what the log
 // stores.
+//
+// It saves on blur: leaving the amount — the last field, and the one whose
+// change completes an entry — posts the form without a click on Record, so a
+// month's bills are typed in and moved past rather than typed in and confirmed.
+// Record stays for the same submit an explicit click, or Enter, has always
+// made; hx-trigger names both.
+//
+// An entry still appends exactly one event, or none. The trigger fires on every
+// amount blur, but htmx validates the form's own required fields before it posts
+// — an entry with no type or no amount never leaves the page — so a blur while
+// the entry is half-typed is not a refused submission, it is no submission.
+// hx-sync drops a second post while the first is in flight, and hx-disabled-elt
+// locks Record with it, so neither a fast second blur nor a double click can
+// turn one entry into two events a log this shape could never take back.
 templ entryForm(f Form) {
 	<form
 		class="entry"
 		hx-post={ EntriesPath }
 		hx-target={ PanelTarget }
 		hx-swap="outerHTML"
+		hx-trigger="submit, change from:#entry-amount"
+		hx-sync="this:drop"
+		hx-disabled-elt="find button"
 	>
 		<div class="field">
 			<label for="entry-month">Month</label>
@@ -180,6 +197,11 @@ templ entryForm(f Form) {
 		</div>
 		<div class="field field-submit">
 			<button class="button" type="submit">Record</button>
+			// Shown only while the post is in flight: htmx toggles .htmx-indicator
+			// for exactly the length of the request, so the "saving" cue needs no
+			// script — it appears when the entry is sent and is gone by the time
+			// the folded panel swaps in, or the form comes back with its errors.
+			<span class="htmx-indicator saving" role="status">Saving…</span>
 		</div>
 	</form>
 }

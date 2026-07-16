@@ -611,6 +611,43 @@ func TestEntry_OffersTheLogsTypesForAutocomplete(t *testing.T) {
 	}
 }
 
+// TestEntry_SavesOnAmountBlur is the story's quick-add: the form posts when the
+// amount — the last field, and the one whose change completes an entry — is
+// left, without a click on Record. The behaviour is htmx's, so what a Go test
+// can hold is the markup that asks for it; the attributes below are the whole
+// contract.
+//
+// hx-trigger keeps submit alongside the amount's change, so an explicit Record
+// (or Enter) still works. hx-sync and hx-disabled-elt are what keep quick-add
+// honest in an append-only log: exactly one event per entry, even if the blur
+// fires twice or Record is double-clicked while the first post is in flight.
+func TestEntry_SavesOnAmountBlur(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := ownerHandler(t)
+	rec := postEntry(t, handler, entry())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST %s status = %d, want %d\n%s", view.EntriesPath, rec.Code, http.StatusOK, rec.Body)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		// Auto-submit on leaving the amount, with the explicit submit kept.
+		`hx-trigger="submit, change from:#entry-amount"`,
+		// One entry stays one event: a second post is dropped while the first
+		// is in flight, and Record is locked with it.
+		`hx-sync="this:drop"`,
+		`hx-disabled-elt="find button"`,
+		// The pending cue that shows for the life of the post and no longer.
+		`class="htmx-indicator saving"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the entry form is missing the quick-add markup %q:\n%s", want, body)
+		}
+	}
+}
+
 // TestEntry_RequiresOwnerSession: the write path is behind the same gate the
 // page is. A stranger who finds the route posts nothing into the log.
 func TestEntry_RequiresOwnerSession(t *testing.T) {
