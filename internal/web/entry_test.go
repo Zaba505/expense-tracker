@@ -646,6 +646,18 @@ func TestEntry_SavesOnAmountBlur(t *testing.T) {
 			t.Errorf("the entry form is missing the quick-add markup %q:\n%s", want, body)
 		}
 	}
+
+	// Save-on-blur fires when the amount is left, so the amount must come after
+	// every field that changes what the event records: a direction or an action
+	// left at its default because the post beat the user to it is a wrong event
+	// this log can only correct with another. The amount input is therefore last,
+	// below the direction, the action, and the note.
+	amount := strings.Index(body, `name="amount"`)
+	for _, before := range []string{`name="direction"`, `name="action"`, `name="note"`} {
+		if at := strings.Index(body, before); at == -1 || at > amount {
+			t.Errorf("the amount input is not after %s; leaving it would post before that field is set:\n%s", before, body)
+		}
+	}
 }
 
 // TestEntry_RequiresOwnerSession: the write path is behind the same gate the
