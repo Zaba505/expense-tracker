@@ -62,12 +62,42 @@ templ MonthPanel(p Panel) {
 // the radio values are domain.Direction, the options are domain.Action — so
 // nothing has to be translated between what the form says and what the log
 // stores.
+//
+// It saves on blur: leaving the amount posts the form without a click on
+// Record, so a month's bills are typed in and moved past rather than typed in
+// and confirmed. Record stays for the same submit an explicit click, or Enter,
+// has always made; hx-trigger names both.
+//
+// The amount is placed last on purpose. Blurring it is what fires the save, so
+// every field that changes what the event records — direction and action, whose
+// defaults are silent, and the note — comes before it: an income typed as an
+// expense, or a set posted as an add, is a wrong event this log can only correct
+// with another, never edit. With the amount at the end, reaching it means the
+// rest is already the way the entry is meant to read.
+//
+// An entry still appends exactly one event, or none. The trigger fires on every
+// amount blur, but htmx validates the form's own required fields before it posts
+// — an entry with no type or no amount never leaves the page — so a blur while
+// the entry is half-typed is not a refused submission, it is no submission.
+// hx-sync drops a second post while the first is in flight, and hx-disabled-elt
+// locks Record with it, so neither a fast second blur nor a double click can
+// turn one entry into two events a log this shape could never take back.
+//
+// One gap the pending cue does not cover: a 5xx (handleEntry's append failure)
+// is not swapped, so the form comes back looking exactly as a save does, with no
+// error shown — and a blur the user has already looked away from is easy to
+// believe recorded. Nothing is lost silently that a retry would not fix (the
+// values stay in the form), but closing this properly means a swappable error,
+// or the script this page has so far done without.
 templ entryForm(f Form) {
 	<form
-		class="entry"
+		class="entry entry-quick"
 		hx-post={ EntriesPath }
 		hx-target={ PanelTarget }
 		hx-swap="outerHTML"
+		hx-trigger="submit, change from:#entry-amount"
+		hx-sync="this:drop"
+		hx-disabled-elt="find button"
 	>
 		<div class="field">
 			<label for="entry-month">Month</label>
@@ -103,26 +133,6 @@ templ entryForm(f Form) {
 				required
 			/>
 			@fieldError(f.Type)
-		</div>
-		<div class="field">
-			<label for="entry-amount">Amount</label>
-			// Text, not number: money.Parse takes "$1,234.56" and "(5.00)" as
-			// readily as "12.34", and a number input would refuse to submit the
-			// shapes it accepts. What makes an amount an amount is decided on
-			// the server, where a curl gets the same answer the browser does.
-			<input
-				id="entry-amount"
-				type="text"
-				name="amount"
-				value={ f.Amount.Value }
-				inputmode="decimal"
-				placeholder="0.00"
-				if f.Amount.Error != "" {
-					aria-invalid="true"
-				}
-				required
-			/>
-			@fieldError(f.Amount)
 		</div>
 		<fieldset class="field toggle">
 			<legend>Direction</legend>
@@ -178,8 +188,38 @@ templ entryForm(f Form) {
 				placeholder="The event this entry corrects"
 			/>
 		</div>
+		// Last, because leaving it is what saves the entry: see the note on
+		// entryForm. Text, not number: money.Parse takes "$1,234.56" and "(5.00)"
+		// as readily as "12.34", and a number input would refuse to submit the
+		// shapes it accepts. What makes an amount an amount is decided on the
+		// server, where a curl gets the same answer the browser does.
+		<div class="field">
+			<label for="entry-amount">Amount</label>
+			<input
+				id="entry-amount"
+				type="text"
+				name="amount"
+				value={ f.Amount.Value }
+				inputmode="decimal"
+				placeholder="0.00"
+				if f.Amount.Error != "" {
+					aria-invalid="true"
+				}
+				required
+			/>
+			@fieldError(f.Amount)
+		</div>
 		<div class="field field-submit">
 			<button class="button" type="submit">Record</button>
+			// A visual cue only, shown while the post is in flight: htmx toggles
+			// .htmx-indicator for exactly the length of the request, so it appears
+			// when the entry is sent and is gone by the time the folded panel swaps
+			// in, or the form comes back with its errors. aria-hidden because the
+			// opacity toggle is not a content change and so never reaches a live
+			// region — the text is always in the DOM — and Record's disabled state
+			// carries the same "in flight" to assistive tech without pretending to
+			// announce.
+			<span class="htmx-indicator saving" aria-hidden="true">Saving…</span>
 		</div>
 	</form>
 }
